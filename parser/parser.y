@@ -126,6 +126,7 @@ import (
 	describe          "DESCRIBE"
 	distinct          "DISTINCT"
 	distinctRow       "DISTINCTROW"
+	distributed		  "DISTRIBUTED"
 	div               "DIV"
 	doubleType        "DOUBLE"
 	drop              "DROP"
@@ -1119,6 +1120,8 @@ import (
 	DatabaseOptionList                     "CREATE Database specification list"
 	DatabaseOptionListOpt                  "CREATE Database specification list opt"
 	DistinctOpt                            "Explicit distinct option"
+	DistributedTypes                       "Distributed option types"
+	DistributedOpt                         "Distributed option"
 	DefaultFalseDistinctOpt                "Distinct option which defaults to false"
 	DefaultTrueDistinctOpt                 "Distinct option which defaults to true"
 	BuggyDefaultFalseDistinctOpt           "Distinct option which accepts DISTINCT ALL and defaults to false"
@@ -4284,7 +4287,7 @@ DatabaseOptionList:
  *      )
  *******************************************************************/
 CreateTableStmt:
-	"CREATE" OptTemporary "TABLE" IfNotExists TableName TableElementListOpt CreateTableOptionListOpt PartitionOpt DuplicateOpt AsOpt CreateTableSelectOpt OnCommitOpt
+	"CREATE" OptTemporary "TABLE" IfNotExists TableName TableElementListOpt CreateTableOptionListOpt PartitionOpt DuplicateOpt AsOpt DistributedOpt CreateTableSelectOpt OnCommitOpt
 	{
 		stmt := $6.(*ast.CreateTableStmt)
 		stmt.Table = $5.(*ast.TableName)
@@ -4295,12 +4298,13 @@ CreateTableStmt:
 			stmt.Partition = $8.(*ast.PartitionOptions)
 		}
 		stmt.OnDuplicate = $9.(ast.OnDuplicateKeyHandlingType)
-		stmt.Select = $11.(*ast.CreateTableStmt).Select
-		if ($12 != nil && stmt.TemporaryKeyword != ast.TemporaryGlobal) || (stmt.TemporaryKeyword == ast.TemporaryGlobal && $12 == nil) {
+		stmt.DistributedOpt = $11.(*ast.DistributedOption)
+		stmt.Select = $12.(*ast.CreateTableStmt).Select
+		if ($13 != nil && stmt.TemporaryKeyword != ast.TemporaryGlobal) || (stmt.TemporaryKeyword == ast.TemporaryGlobal && $13 == nil) {
 			yylex.AppendError(yylex.Errorf("GLOBAL TEMPORARY and ON COMMIT DELETE ROWS must appear together"))
 		} else {
 			if stmt.TemporaryKeyword == ast.TemporaryGlobal {
-				stmt.OnCommitDelete = $12.(bool)
+				stmt.OnCommitDelete = $13.(bool)
 			}
 		}
 		$$ = stmt
@@ -12068,6 +12072,33 @@ TableElementListOpt:
 			Cols:        columnDefs,
 			Constraints: constraints,
 		}
+	}
+
+DistributedOpt:
+	{
+		$$ = &ast.DistributedOption{Tp: ast.DistributedOptionDuplicate, Default: true}
+	}
+|	"DISTRIBUTED" "BY" DistributedTypes
+	{
+		$$ = $3
+	}
+
+DistributedTypes:
+	"RANGE"
+	{
+		$$ = &ast.DistributedOption{Tp: ast.DistributedOptionRange, Default: false}
+	}
+|	"HASH"
+	{
+		$$ = &ast.DistributedOption{Tp: ast.DistributedOptionHash, Default: false}
+	}
+|	"LIST"
+	{
+		$$ = &ast.DistributedOption{Tp: ast.DistributedOptionList, Default: false}
+	}
+|	"DUPLICATE"
+	{
+		$$ = &ast.DistributedOption{Tp: ast.DistributedOptionDuplicate, Default: false}
 	}
 
 TableOption:

@@ -381,24 +381,32 @@ func RunRestoreTest(t *testing.T, sourceSQLs, expectSQLs string, enableWindowFun
 	p := parser.New()
 	p.EnableWindowFunc(enableWindowFunc)
 	comment := fmt.Sprintf("source %v", sourceSQLs)
-	stmts, _, err := p.Parse(sourceSQLs, "", "")
+	stmts, _, err := p.Parse(sourceSQLs, "", "")// 将所有SQL 语句进行词法语法解析，结果为 stmts
 	require.NoErrorf(t, err, "source %v", sourceSQLs)
 	restoreSQLs := ""
-	for _, stmt := range stmts {
+	for _, stmt := range stmts {// 遍历 stmts 中所有语句
 		sb.Reset()
-		err = stmt.Restore(NewRestoreCtx(DefaultRestoreFlags, &sb))
+		err = stmt.Restore(NewRestoreCtx(DefaultRestoreFlags, &sb))//执行stmt 的Restore 方法
 		require.NoError(t, err, comment)
-		restoreSQL := sb.String()
-		comment = fmt.Sprintf("source %v; restore %v", sourceSQLs, restoreSQL)
-		restoreStmt, err := p.ParseOneStmt(restoreSQL, "", "")
+		restoreSQL := sb.String()// 记录 Restore 得到的字符串
+		comment = fmt.Sprintf("source %v; restore %v", sourceSQLs, restoreSQL)// 打印原始SQL语句字符串 与经过Parser和Restore 后得到的字符串
+		restoreStmt, err := p.ParseOneStmt(restoreSQL, "", "")// 将Restore 得到的SQL 字符串再次执行解析
 		require.NoError(t, err, comment)
 		CleanNodeText(stmt)
 		CleanNodeText(restoreStmt)
+		// 将原始SQL 解析得到的 stmt 与经由RestoreSQL 解析得到的 stmt 对比，判断是否相同，
+		// 此时易发生stmt 中的 StrValue 属性的值大小写不一致问题
+		// 根据 ddl.go 中的 Restore 方法，大多restore 得到的字符串为大写，对于 StrValue
+		// 而test case 中的sql 如果原始为小写，则会产生大小写不一致导致 Equal 检查失败
+		// 因此对于新增的 stmt node 类型，解析时需要避免对于 stringLit 进行大小写转换
+		// 例如将 sql 语句中的 "list" 字符串根据 "LIST" 归约规则匹配后（归约匹配规则都是大写），
+		// 不要将"LIST" 记录到 StrValue 类型属性中
 		require.Equal(t, stmt, restoreStmt, comment)
 		if restoreSQLs != "" {
 			restoreSQLs += "; "
 		}
 		restoreSQLs += restoreSQL
+		// fmt.Println(restoreSQLs)
 	}
 	require.Equalf(t, expectSQLs, restoreSQLs, "restore %v; expect %v", restoreSQLs, expectSQLs)
 }
@@ -2416,6 +2424,21 @@ func TestBuiltinFuncAsIdentifier(t *testing.T) {
 	}
 	runTests(false)
 	runTests(true)
+}
+
+func TestDistributedSQL(t *testing.T) {
+	table := []testCase{
+		// {"CREATE TABLE T1 (id int,name varchar(255));", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255))"},
+		// {"CREATE TABLE T1 (id int,name varchar(255)) DEFAULT CHARSET=utf8", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DEFAULT CHARACTER SET = UTF8"},
+		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by list", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY LIST"},
+		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by LIST", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY LIST"},
+		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by hash", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY HASH"},
+		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by range", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY RANGE"},
+		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by duplicate", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY DUPLICATE"},
+		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by id", false, ""},
+
+	}
+	RunTest(t, table, false)
 }
 
 func TestDDL(t *testing.T) {
@@ -6599,6 +6622,7 @@ func (checker *nodeTextCleaner) Enter(in ast.Node) (out ast.Node, skipChildren b
 	switch node := in.(type) {
 	case *ast.CreateTableStmt:
 		for _, opt := range node.Options {
+			fmt.Println(opt.StrValue)
 			switch opt.Tp {
 			case ast.TableOptionCharset:
 				opt.StrValue = strings.ToUpper(opt.StrValue)

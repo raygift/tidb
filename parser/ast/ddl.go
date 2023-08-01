@@ -1054,6 +1054,7 @@ type CreateTableStmt struct {
 	Options        []*TableOption
 	Partition      *PartitionOptions
 	OnDuplicate    OnDuplicateKeyHandlingType
+	DistributedOpt *DistributedOption
 	Select         ResultSetNode
 }
 
@@ -1116,6 +1117,16 @@ func (n *CreateTableStmt) Restore(ctx *format.RestoreCtx) error {
 		ctx.WritePlain(" ")
 		if err := n.Partition.Restore(ctx); err != nil {
 			return errors.Annotate(err, "An error occurred while splicing CreateTableStmt Partition")
+		}
+	}
+
+	// 对于没有 distributed by 的 sql语句，仍然会解析得到 Default 的 DistributedOpt
+	// 要显示判断是否为 default 从而避免执行 DistributedOpt的Restore
+	// 虽然不会添加有内容的字符串，但会加入一个多余的空格" "
+	if n.DistributedOpt != nil && !n.DistributedOpt.Default {
+		ctx.WritePlain(" ")
+		if err := n.DistributedOpt.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while splicing CreateTableStmt Distributed")
 		}
 	}
 
@@ -4337,6 +4348,53 @@ func (n *PartitionOptions) Accept(v Visitor) (Node, bool) {
 		}
 	}
 	return v.Leave(n)
+}
+
+// DistributedOptionType is the type for DistributedOption
+type DistributedOptionType int
+
+// DistributedOption types.
+const (
+	DistributedOptionDuplicate DistributedOptionType = iota
+	DistributedOptionRange
+	DistributedOptionHash
+	DistributedOptionList
+)
+
+// DistributedOption specifies the partition options.
+type DistributedOption struct {
+	node
+	Tp            DistributedOptionType
+	Default       bool
+	StrValue      string
+}
+func (n *DistributedOption) Validate() error {
+	return nil
+}
+
+func (n *DistributedOption) Restore(ctx *format.RestoreCtx) error {
+	if n.Default{
+		return nil
+	}
+	switch n.Tp {
+		case DistributedOptionDuplicate:
+			ctx.WriteKeyWord("DISTRIBUTED BY DUPLICATE")
+		case DistributedOptionRange:
+			ctx.WriteKeyWord("DISTRIBUTED BY RANGE")
+		case DistributedOptionHash:
+			ctx.WriteKeyWord("DISTRIBUTED BY HASH")
+		case DistributedOptionList:
+			ctx.WriteKeyWord("DISTRIBUTED BY LIST")
+
+		default:
+			return errors.Errorf("invalid DistributedOptionType: %d", n.Tp) 
+	}
+	return nil
+
+}
+
+func (n *DistributedOption) Accept(v Visitor) (Node, bool) {
+	return n,true
 }
 
 // RecoverTableStmt is a statement to recover dropped table.

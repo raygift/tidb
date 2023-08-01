@@ -102,6 +102,16 @@ func TestUnderscoreCS(t *testing.T) {
 	requires.Equal(t, stringLit, tok)
 }
 
+func TestDistributedKw(t *testing.T){
+	table :=[]testCaseItem{
+		{`distributed`, distributed},
+		{`by`, by},
+		{`'list'`, stringLit},
+
+	}
+	runTest(t, table)
+}
+
 func TestLiteral(t *testing.T) {
 	table := []testCaseItem{
 		{`'''a'''`, stringLit},
