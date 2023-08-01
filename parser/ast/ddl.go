@@ -4368,6 +4368,22 @@ type DistributedOption struct {
 	Default       bool
 	StrValue      string
 }
+
+func (d DistributedOptionType) String() string{
+	switch d {
+	case DistributedOptionDuplicate:
+		return "DistributedOptionDuplicate"
+	case	DistributedOptionRange:
+		return "DistributedOptionRange"
+	case DistributedOptionHash:
+		return "DistributedOptionHash"
+	case DistributedOptionList:
+		return "DistributedOptionList"
+	default:
+		return ""
+	}
+}
+
 func (n *DistributedOption) Validate() error {
 	return nil
 }
