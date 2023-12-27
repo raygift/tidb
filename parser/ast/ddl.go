@@ -14,6 +14,7 @@
 package ast
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -1054,7 +1055,7 @@ type CreateTableStmt struct {
 	Options        []*TableOption
 	Partition      *PartitionOptions
 	OnDuplicate    OnDuplicateKeyHandlingType
-	DistributedOpt *DistributedOption
+	Distributed    *DistributedOptions
 	Select         ResultSetNode
 }
 
@@ -1120,12 +1121,12 @@ func (n *CreateTableStmt) Restore(ctx *format.RestoreCtx) error {
 		}
 	}
 
-	// 对于没有 distributed by 的 sql语句，仍然会解析得到 Default 的 DistributedOpt
+	// 对于没有 distributed by 的 sql语句，仍然会解析得到 Default 的 Distributed
 	// 要显示判断是否为 default 从而避免执行 DistributedOpt的Restore
 	// 虽然不会添加有内容的字符串，但会加入一个多余的空格" "
-	if n.DistributedOpt != nil && !n.DistributedOpt.Default {
+	if n.Distributed != nil && !n.Distributed.Default {
 		ctx.WritePlain(" ")
-		if err := n.DistributedOpt.Restore(ctx); err != nil {
+		if err := n.Distributed.Restore(ctx); err != nil {
 			return errors.Annotate(err, "An error occurred while splicing CreateTableStmt Distributed")
 		}
 	}
@@ -3823,6 +3824,7 @@ var (
 	ErrUnknownCharacterSet                  = terror.ClassDDL.NewStd(mysql.ErrUnknownCharacterSet)
 	ErrCoalescePartitionNoPartition         = terror.ClassDDL.NewStd(mysql.ErrCoalescePartitionNoPartition)
 	ErrWrongUsage                           = terror.ClassDDL.NewStd(mysql.ErrWrongUsage)
+	ErrParse                                = terror.ClassDDL.NewStd(mysql.ErrParse)
 )
 
 type SubPartitionDefinition struct {
@@ -4350,10 +4352,10 @@ func (n *PartitionOptions) Accept(v Visitor) (Node, bool) {
 	return v.Leave(n)
 }
 
-// DistributedOptionType is the type for DistributedOption
+// DistributedOptionType is the type for DistributedOptions
 type DistributedOptionType int
 
-// DistributedOption types.
+// DistributedOptions types.
 const (
 	DistributedOptionDuplicate DistributedOptionType = iota
 	DistributedOptionRange
@@ -4361,19 +4363,183 @@ const (
 	DistributedOptionList
 )
 
-// DistributedOption specifies the partition options.
-type DistributedOption struct {
+type DistributedMethod struct {
+	// To be able to get original text and replace the syntactic sugar with generated
+	// distributed definitions
 	node
-	Tp            DistributedOptionType
-	Default       bool
-	StrValue      string
+	// Tp is the type of the distributed function
+	// 可取值为 duplicate，hash，range，list
+	Tp DistributedOptionType
+	// Expr is an expression used as argument of RANGE AND LIST types
+	// GDB RANGE 和 LIST 支持表达式作为分片键
+	// GDB distributed 与mysql partition 不同点：GDB 的 Hash 分片方式不支持 HASH（expr)，而 mysql 支持 hash(expr)
+	Expr ExprNode
+	// ColumnNames is a list of column names used as argument of HASH,
+	// RANGE(COLUMNS) and LIST(COLUMNS) types
+	// GDB HASH 支持 column_list 作为分片键，
+	// 此时 GDB 与 mysql 不同，GDB 没有关键字 COLUMNS 来标识是column_list
+	ColumnNames []*ColumnName
+}
+type DistributedDefinitionClause interface {
+	restore(ctx *format.RestoreCtx) error
+	acceptInPlace(v Visitor) bool
+	// Validate checks if the clause is consistent with the given options.
+	// `pt` can be 0 and `columns` can be -1 to skip checking the clause against
+	// the partition type or number of columns in the expression list.
+	Validate(dt DistributedOptionType, columns int) error
 }
 
-func (d DistributedOptionType) String() string{
+// GDB distributed by duplicate 分片规则无需分片子句
+type DistributedDefinitionClauseNone struct{}
+
+func (n *DistributedDefinitionClauseNone) restore(ctx *format.RestoreCtx) error {
+	return nil
+
+}
+func (n *DistributedDefinitionClauseNone) acceptInPlace(v Visitor) bool {
+	return true
+}
+func (n *DistributedDefinitionClauseNone) Validate(dt DistributedOptionType, columns int) error {
+	return nil
+}
+
+type DistributedDefinitionClauseLessThan struct {
+	// Less Than 只用于 Range 分区规则中
+	// range(id) (g1 values less than (100), g2 values less than(200))
+	// GDB 不支持 mysql partition 的 range columns(b,c) (partition x values less than (100,'a'))
+	// 因此 less than 之后数值只有一个，可能是 (100)，也可能是 MAXVALUE
+	// 不能是一组 value_list，类似(100,200)
+	Expr ExprNode
+}
+
+func (n *DistributedDefinitionClauseLessThan) restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord(" VALUES LESS THAN")
+
+	writer := bytes.NewBufferString("")
+	n.Expr.Format(writer)
+
+	if value := fmt.Sprintf("%s", writer); value == "MAXVALUE" {
+		ctx.WritePlain(" ")
+		n.Expr.Restore(ctx)
+		return nil
+	}
+	ctx.WritePlain(" (")
+	n.Expr.Restore(ctx)
+	ctx.WritePlain(")")
+	return nil
+}
+func (n *DistributedDefinitionClauseLessThan) acceptInPlace(v Visitor) bool {
+	return true
+}
+func (n *DistributedDefinitionClauseLessThan) Validate(dt DistributedOptionType, columns int) error {
+	switch dt {
+	case DistributedOptionRange, 0:
+	default:
+		return ErrPartitionWrongValues.GenWithStackByArgs("RANGE", "LESS THAN")
+	}
+	return nil
+}
+
+type DistributedDefinitionClauseIn struct {
+	// GDB 只支持单个值的 values in，不支持mysql partition语法中的 partition x values in ((3, 4), (5, 6))
+	// 因此这里只需要一维元组，不需要二维元组
+	Values []ExprNode
+}
+
+func (n *DistributedDefinitionClauseIn) restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord(" VALUES IN")
+	ctx.WritePlain(" (")
+
+	if len(n.Values) == 0 {
+		ctx.WriteKeyWord("DEFAULT")
+	} else {
+
+		for i, v := range n.Values {
+			if err := v.Restore(ctx); err != nil {
+				return err
+			}
+			if i < len(n.Values)-1 {
+				ctx.WritePlain(",")
+			}
+		}
+	}
+	ctx.WritePlain(")")
+
+	return nil
+}
+func (n *DistributedDefinitionClauseIn) acceptInPlace(v Visitor) bool {
+	return true
+}
+func (n *DistributedDefinitionClauseIn) Validate(dt DistributedOptionType, columns int) error {
+	return nil
+}
+
+// 类似 parser/ast/expressions.go type BetweenExpr struct
+type DistributedDefinitionClauseBetweenValuePair struct {
+	LeftValue  ExprNode
+	RightValue ExprNode
+}
+
+type DistributedDefinitionClauseBetween struct {
+	// GDB 支持左闭右开区间指定一个存储安全组（即分片）中的数值范围
+	// 且支持 distributed by list(id)(g1[100,200)[300,400), g2[400,500))
+	// 每个分片的取值范围可以使用二维数组表示
+	// 或者如下所示，使用 DistributedDefinitionClauseBetweenValuePair  保存一个左闭右开区间，
+	// 然后使用[]DistributedDefinitionClauseBetweenValuePair 保存多个左闭右开区间
+	Values []DistributedDefinitionClauseBetweenValuePair
+}
+
+func (n *DistributedDefinitionClauseBetween) restore(ctx *format.RestoreCtx) error {
+	for i, v := range n.Values {
+		if i == 0 {
+			ctx.WritePlain(" ")
+		}
+		ctx.WritePlain("[")
+		v.LeftValue.Restore(ctx)
+		ctx.WritePlain(",")
+		v.RightValue.Restore(ctx)
+		ctx.WritePlain(")")
+	}
+	return nil
+}
+func (n *DistributedDefinitionClauseBetween) acceptInPlace(v Visitor) bool {
+	return true
+}
+func (n *DistributedDefinitionClauseBetween) Validate(dt DistributedOptionType, columns int) error {
+	return nil
+}
+
+// DistributedDefinition defines a single distribution.
+type DistributedDefinition struct {
+	// GDB 使用 g1,g2...或 G1,G2 作为存储安全组名(GroupNo)
+	Name model.CIStr
+	// GDB 分片规则支持使用 VALUES IN\ VALUES LESS THAN\ [a,b) 左闭右开区间
+	// 分片规则的合法值除了整数外，还包括 `MAXVALUE`,`DEFAULT` 两个关键字
+	Clause DistributedDefinitionClause
+}
+
+func (n *DistributedDefinition) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteName(n.Name.O)
+	if err := n.Clause.restore(ctx); err != nil {
+		return errors.Annotate(err, "An error occurred while restore DistributedDefinition.Clause")
+	}
+	return nil
+}
+
+// DistributedOptions specifies the partition options.
+type DistributedOptions struct {
+	DistributedMethod
+	Definitions []*DistributedDefinition
+	// Tp          DistributedOptionType
+	Default  bool
+	StrValue string
+}
+
+func (d DistributedOptionType) String() string {
 	switch d {
 	case DistributedOptionDuplicate:
 		return "DistributedOptionDuplicate"
-	case	DistributedOptionRange:
+	case DistributedOptionRange:
 		return "DistributedOptionRange"
 	case DistributedOptionHash:
 		return "DistributedOptionHash"
@@ -4384,33 +4550,93 @@ func (d DistributedOptionType) String() string{
 	}
 }
 
-func (n *DistributedOption) Validate() error {
+func (n *DistributedOptions) Validate() error {
+	// // 校验values less than 分片规则的数组严格递增
+	// // 非法示例：distributed by range(id)(g1 values less than (200), g2 values less than (10))
+	// intValues := make([]int, 0)
+	// if n.Definitions != nil {
+	// 	if n.Tp == DistributedOptionRange {
+	// 		for i, v := range n.Definitions {
+	// 			typeOfClause := reflect.TypeOf(v.Clause)
+	// 			if typeOfClause.Name() != "DistributedDefinitionClauseLessThan" {
+	// 				return errors.New(fmt.Sprintf("%d", mysql.ErrParse))
+	// 			}
+
+	// 			writer := bytes.NewBufferString("")
+	// 			v.Clause.(*DistributedDefinitionClauseLessThan).Expr.(ValueExpr).Format(writer)
+	// 			item, _, _ := writer.ReadRune()
+	// 			intValues = append(intValues, int(item))
+	// 			if i != 0 {
+	// 				if intValues[i-1] >= intValues[i] {
+	// 					// if v.Clause >= n.Definitions[i+1].Clause.(*DistributedDefinitionClauseLessThan).Expr {
+	// 					return errors.New("VALUES LESS THAN value must be strictly increased for each distribution!")
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// }
 	return nil
+
 }
 
-func (n *DistributedOption) Restore(ctx *format.RestoreCtx) error {
-	if n.Default{
+func (n *DistributedOptions) Restore(ctx *format.RestoreCtx) error {
+	if n.Default {
 		return nil
 	}
 	switch n.Tp {
-		case DistributedOptionDuplicate:
-			ctx.WriteKeyWord("DISTRIBUTED BY DUPLICATE")
-		case DistributedOptionRange:
-			ctx.WriteKeyWord("DISTRIBUTED BY RANGE")
-		case DistributedOptionHash:
-			ctx.WriteKeyWord("DISTRIBUTED BY HASH")
-		case DistributedOptionList:
-			ctx.WriteKeyWord("DISTRIBUTED BY LIST")
+	case DistributedOptionDuplicate:
+		ctx.WriteKeyWord("DISTRIBUTED BY DUPLICATE")
 
-		default:
-			return errors.Errorf("invalid DistributedOptionType: %d", n.Tp) 
+	case DistributedOptionRange:
+		ctx.WriteKeyWord("DISTRIBUTED BY RANGE")
+	case DistributedOptionHash:
+		ctx.WriteKeyWord("DISTRIBUTED BY HASH")
+	case DistributedOptionList:
+		ctx.WriteKeyWord("DISTRIBUTED BY LIST")
+
+	default:
+		return errors.Errorf("invalid DistributedOptionType: %d", n.Tp)
 	}
+	if n.ColumnNames != nil {
+		ctx.WritePlain(" (")
+		for i, col := range n.ColumnNames {
+			if i > 0 {
+				ctx.WritePlain(",")
+			}
+			if err := col.Restore(ctx); err != nil {
+				return errors.Annotatef(err, "An error occurred while splicing DistributedMethod.ColumnName[%d]", i)
+			}
+		}
+		ctx.WritePlain(")")
+
+	}
+	if n.Expr != nil {
+		ctx.WritePlain(" (")
+		if err := n.Expr.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore DistributedMethod.Expr")
+		}
+		ctx.WritePlain(")")
+	}
+
+	if n.Definitions != nil {
+		ctx.WritePlain(" (")
+		for i, def := range n.Definitions {
+			if i != 0 {
+				ctx.WritePlain(",")
+			}
+			if err := def.Restore(ctx); err != nil {
+				return errors.Annotatef(err, "An error occurred while restore AlterTableSpec.PartDefinitions[%d]", i)
+			}
+		}
+		ctx.WritePlain(")")
+	}
+
 	return nil
 
 }
 
-func (n *DistributedOption) Accept(v Visitor) (Node, bool) {
-	return n,true
+func (n *DistributedOptions) Accept(v Visitor) (Node, bool) {
+	return n, true
 }
 
 // RecoverTableStmt is a statement to recover dropped table.

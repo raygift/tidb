@@ -1120,8 +1120,14 @@ import (
 	DatabaseOptionList                     "CREATE Database specification list"
 	DatabaseOptionListOpt                  "CREATE Database specification list opt"
 	DistinctOpt                            "Explicit distinct option"
-	DistributedTypes                       "Distributed option types"
-	DistributedOpt                         "Distributed option"
+	DistributedMethod                      "GDB Distributed option method"
+	DistributedOpt                         "GDB Distributed option"
+	BetweenValuePair					   "GDB DistributedDefinitionClauseBetween BetweenValuePair"
+	DistributedDefValuesOpt				   "GDB Distributed Definition Clause Value Options"
+	DistributedDefinitionClauseBetweenList  "GDB DistributedDefinitionClauseBetweenList"
+	DistributedDefinitionList				"GDB DistributedDefinitionList"
+	DistributedDefinition					"GDB DistributedDefinition"
+	GroupNoList							   "GDB GroupNoList"
 	DefaultFalseDistinctOpt                "Distinct option which defaults to false"
 	DefaultTrueDistinctOpt                 "Distinct option which defaults to true"
 	BuggyDefaultFalseDistinctOpt           "Distinct option which accepts DISTINCT ALL and defaults to false"
@@ -4298,7 +4304,7 @@ CreateTableStmt:
 			stmt.Partition = $8.(*ast.PartitionOptions)
 		}
 		stmt.OnDuplicate = $9.(ast.OnDuplicateKeyHandlingType)
-		stmt.DistributedOpt = $11.(*ast.DistributedOption)
+		stmt.Distributed = $11.(*ast.DistributedOptions)
 		stmt.Select = $12.(*ast.CreateTableStmt).Select
 		if ($13 != nil && stmt.TemporaryKeyword != ast.TemporaryGlobal) || (stmt.TemporaryKeyword == ast.TemporaryGlobal && $13 == nil) {
 			yylex.AppendError(yylex.Errorf("GLOBAL TEMPORARY and ON COMMIT DELETE ROWS must appear together"))
@@ -12076,29 +12082,163 @@ TableElementListOpt:
 
 DistributedOpt:
 	{
-		$$ = &ast.DistributedOption{Tp: ast.DistributedOptionDuplicate, Default: true}
+		method := &ast.DistributedMethod{
+			Tp: ast.DistributedOptionDuplicate,
+		}
+		$$ = &ast.DistributedOptions{
+			DistributedMethod: *method,
+			Default: true,
+			}
 	}
-|	"DISTRIBUTED" "BY" DistributedTypes
+|	"DISTRIBUTED" "BY" DistributedMethod
 	{
 		$$ = $3
 	}
 
-DistributedTypes:
-	"RANGE"
+DistributedMethod:
+	"DUPLICATE" '(' GroupNoList ')'
 	{
-		$$ = &ast.DistributedOption{Tp: ast.DistributedOptionRange, Default: false}
+		method := &ast.DistributedMethod{
+					Tp: ast.DistributedOptionDuplicate,
+				}
+		$$ = &ast.DistributedOptions{
+			DistributedMethod: *method,
+			Definitions: $3.([]*ast.DistributedDefinition),
+		}
 	}
-|	"HASH"
+|	"HASH" '(' ColumnNameList ')' '(' GroupNoList ')'
 	{
-		$$ = &ast.DistributedOption{Tp: ast.DistributedOptionHash, Default: false}
+		method := &ast.DistributedMethod{
+				Tp: ast.DistributedOptionHash,
+				ColumnNames:   $3.([]*ast.ColumnName),
+			}
+		$$ = &ast.DistributedOptions{
+			DistributedMethod: *method,
+			Definitions: $6.([]*ast.DistributedDefinition),
+		}		
+
+		// $$ = &ast.DistributedOptions{Tp: ast.DistributedOptionHash, Default: false}
 	}
-|	"LIST"
+|	"LIST" '(' Expression ')' '(' DistributedDefinitionList ')'
 	{
-		$$ = &ast.DistributedOption{Tp: ast.DistributedOptionList, Default: false}
+		method := &ast.DistributedMethod{
+				Tp: ast.DistributedOptionList,
+				Expr: $3.(ast.ExprNode),
+			}
+		$$ = &ast.DistributedOptions{
+			DistributedMethod: *method,
+			Definitions: $6.([]*ast.DistributedDefinition),
+		}	
+		// $$ = &ast.DistributedOptions{Tp: ast.DistributedOptionList, Default: false}
 	}
-|	"DUPLICATE"
+|	"RANGE" '(' Expression ')' '(' DistributedDefinitionList ')'
 	{
-		$$ = &ast.DistributedOption{Tp: ast.DistributedOptionDuplicate, Default: false}
+		// colList := []*ast.ColumnName{
+		// 	$3.(*ast.ColumnName),
+		// }
+		method := &ast.DistributedMethod{
+				Tp: ast.DistributedOptionRange,
+				// ColumnNames:   colList,
+				Expr: $3.(ast.ExprNode),
+			}
+		$$ = &ast.DistributedOptions{
+			DistributedMethod: *method,
+			Definitions: $6.([]*ast.DistributedDefinition),
+		}
+		// $$ = &ast.DistributedOptions{Tp: ast.DistributedOptionRange, Default: false}
+	}
+
+DistributedDefinitionList:
+	DistributedDefinition
+	{
+		list := make([]*ast.DistributedDefinition, 0)
+		$$ =  append(list, $1.(*ast.DistributedDefinition))
+	}
+|	DistributedDefinitionList ',' DistributedDefinition
+	{
+		list := $1.([]*ast.DistributedDefinition)
+		$$ =  append(list, $3.(*ast.DistributedDefinition))
+	}
+
+GroupNoList:
+	/* GroupNoList 适用于 distributed by duplicated*/
+	Identifier
+	{
+		list := make([]*ast.DistributedDefinition, 0)
+		def := &ast.DistributedDefinition{
+			Name:   model.NewCIStr($1),
+			Clause: &ast.DistributedDefinitionClauseNone{},
+		}
+		$$ = append(list, def)
+	}
+|	GroupNoList ',' Identifier
+	{
+		def := &ast.DistributedDefinition{
+			Name:   model.NewCIStr($3),
+			Clause: &ast.DistributedDefinitionClauseNone{},
+		}
+		$$ = append($1.([]*ast.DistributedDefinition), def)
+	}
+
+DistributedDefinition:
+	Identifier DistributedDefValuesOpt
+	{
+		$$ = &ast.DistributedDefinition{
+			Name:   model.NewCIStr($1),
+			Clause: $2.(ast.DistributedDefinitionClause),
+		}	
+	}
+
+DistributedDefValuesOpt:
+	"VALUES" "LESS" "THAN" "MAXVALUE"
+	{
+		value := &ast.MaxValueExpr{}
+		$$ = &ast.DistributedDefinitionClauseLessThan{
+			Expr: value,
+		}	
+	}
+|	"VALUES" "LESS" "THAN" '(' BitExpr ')'
+	{
+		$$ = &ast.DistributedDefinitionClauseLessThan{
+			Expr: $5.(ast.ExprNode),
+		}
+	}	
+|	"VALUES" "IN" '(' ExpressionList ')'
+	{
+		$$ = &ast.DistributedDefinitionClauseIn{
+			Values: $4.([]ast.ExprNode),
+		}
+	}
+|	"VALUES" "IN" '(' "DEFAULT" ')'
+	{
+		$$ = &ast.DistributedDefinitionClauseIn{}
+	}
+|	DistributedDefinitionClauseBetweenList
+	{
+		$$ = &ast.DistributedDefinitionClauseBetween{
+			Values: $1.([]ast.DistributedDefinitionClauseBetweenValuePair),
+		}
+	}
+
+BetweenValuePair:
+	'[' BitExpr ',' BitExpr ')'
+	{
+		$$ = ast.DistributedDefinitionClauseBetweenValuePair{
+			LeftValue:  $2,
+			RightValue: $4,
+		}
+	}
+
+DistributedDefinitionClauseBetweenList:
+	BetweenValuePair
+	{
+		list := make([]ast.DistributedDefinitionClauseBetweenValuePair, 0)
+		pair := $1.(ast.DistributedDefinitionClauseBetweenValuePair)
+		$$ = append(list, pair)
+	}
+|	DistributedDefinitionClauseBetweenList BetweenValuePair
+	{
+		$$ = append($1.([]ast.DistributedDefinitionClauseBetweenValuePair), $2.(ast.DistributedDefinitionClauseBetweenValuePair))
 	}
 
 TableOption:
