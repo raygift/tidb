@@ -2930,6 +2930,7 @@ const (
 	AlterTableReorganizeLastPartition
 	AlterTableReorganizeFirstPartition
 	AlterTableRemoveTTL
+	AlterTableDistributed
 )
 
 // LockType is the type for AlterTableSpec.
@@ -3022,6 +3023,7 @@ type AlterTableSpec struct {
 	Partition        *PartitionOptions
 	PartitionNames   []model.CIStr
 	PartDefinitions  []*PartitionDefinition
+	Distributed      *AlterDistributedOptions
 	WithValidation   bool
 	Num              uint64
 	Visibility       IndexVisibility
@@ -3497,6 +3499,12 @@ func (n *AlterTableSpec) Restore(ctx *format.RestoreCtx) error {
 		if err := n.Partition.Restore(ctx); err != nil {
 			return errors.Annotate(err, "An error occurred while restore AlterTableSpec.Partition")
 		}
+	case AlterTableDistributed:
+		if n.Distributed != nil {
+			if err := n.Distributed.Restore(ctx); err != nil {
+				return errors.Annotate(err, "An error occurred while restore AlterTableSpec.Distributed")
+			}
+		}
 	case AlterTableEnableKeys:
 		ctx.WriteKeyWord("ENABLE KEYS")
 	case AlterTableDisableKeys:
@@ -3742,8 +3750,18 @@ func (n *AlterTableStmt) Restore(ctx *format.RestoreCtx) error {
 		specs = append(specs, spec)
 	}
 	for i, spec := range specs {
-		if i == 0 || spec.Tp == AlterTablePartition || spec.Tp == AlterTableRemovePartitioning || spec.Tp == AlterTableImportTablespace || spec.Tp == AlterTableDiscardTablespace {
+		if i == 0 ||
+			spec.Tp == AlterTablePartition ||
+			spec.Tp == AlterTableRemovePartitioning ||
+			spec.Tp == AlterTableImportTablespace ||
+			spec.Tp == AlterTableDiscardTablespace {
 			ctx.WritePlain(" ")
+		} else if spec.Tp == AlterTableDistributed {
+			// parser.y AlterTableStmt 中 AlterDistributedOpt 位于 AlterTableSpecSingleOpt 之后，
+			// 与 AlterTableSpecSingleOpt 类似
+			// 此处原代码处理了alter table sql语句只包含一个 AlterTableSpecSingleOpt的情形
+			// 因此后加的 AlterDistributedOpt 会导致 specs 多一个，即使 AlterDistributedOpt 为空时
+			// 仍会多打印一个空格
 		} else {
 			ctx.WritePlain(", ")
 		}
@@ -4526,7 +4544,7 @@ func (n *DistributedDefinition) Restore(ctx *format.RestoreCtx) error {
 	return nil
 }
 
-// DistributedOptions specifies the partition options.
+// DistributedOptions specifies the distributed options.
 type DistributedOptions struct {
 	DistributedMethod
 	Definitions []*DistributedDefinition
@@ -4636,6 +4654,25 @@ func (n *DistributedOptions) Restore(ctx *format.RestoreCtx) error {
 }
 
 func (n *DistributedOptions) Accept(v Visitor) (Node, bool) {
+	return n, true
+}
+
+type AlterDistributedOptions struct {
+	*DistributedOptions
+	IsForce bool
+}
+
+func (n *AlterDistributedOptions) Validate() error {
+	return nil
+}
+func (n *AlterDistributedOptions) Restore(ctx *format.RestoreCtx) error {
+	n.DistributedOptions.Restore(ctx)
+	if n.IsForce {
+		ctx.WriteKeyWord(" FORCE")
+	}
+	return nil
+}
+func (n *AlterDistributedOptions) Accept(v Visitor) (Node, bool) {
 	return n, true
 }
 

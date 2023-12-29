@@ -1128,6 +1128,7 @@ import (
 	DistributedDefinitionList				"GDB DistributedDefinitionList"
 	DistributedDefinition					"GDB DistributedDefinition"
 	GroupNoList							   "GDB GroupNoList"
+	AlterDistributedOpt					   "GDB Alter Table DistributedOpt"
 	DefaultFalseDistinctOpt                "Distinct option which defaults to false"
 	DefaultTrueDistinctOpt                 "Distinct option which defaults to true"
 	BuggyDefaultFalseDistinctOpt           "Distinct option which accepts DISTINCT ALL and defaults to false"
@@ -1656,11 +1657,14 @@ Start:
  * See https://dev.mysql.com/doc/refman/5.7/en/alter-table.html
  *******************************************************************************************/
 AlterTableStmt:
-	"ALTER" IgnoreOptional "TABLE" TableName AlterTableSpecListOpt AlterTableSpecSingleOpt
+	"ALTER" IgnoreOptional "TABLE" TableName AlterTableSpecListOpt AlterTableSpecSingleOpt AlterDistributedOpt
 	{
 		specs := $5.([]*ast.AlterTableSpec)
 		if $6 != nil {
 			specs = append(specs, $6.(*ast.AlterTableSpec))
+		}
+		if $7 != nil {
+			specs = append(specs, $7.(*ast.AlterTableSpec))
 		}
 		$$ = &ast.AlterTableStmt{
 			Table: $4.(*ast.TableName),
@@ -2574,13 +2578,6 @@ AlterTableSpec:
 			Algorithm: $1.(ast.AlgorithmType),
 		}
 	}
-|	"FORCE"
-	{
-		// Parse it and ignore it. Just for compatibility.
-		$$ = &ast.AlterTableSpec{
-			Tp: ast.AlterTableForce,
-		}
-	}
 |	"WITH" "VALIDATION"
 	{
 		// Parse it and ignore it. Just for compatibility.
@@ -2656,6 +2653,24 @@ AlterTableSpec:
 	{
 		$$ = &ast.AlterTableSpec{
 			Tp: ast.AlterTableNoCache,
+		}
+	}
+
+AlterDistributedOpt:
+	DistributedOpt ForceOpt
+	{
+		if $1 != nil {
+			opt := &ast.AlterDistributedOptions{
+				DistributedOptions: $1.(*ast.DistributedOptions),
+				IsForce: $2.(bool),
+			}
+		
+			$$ = &ast.AlterTableSpec{
+				Tp:        ast.AlterTableDistributed,
+				Distributed: opt,
+			}
+		} else {
+			$$ = nil
 		}
 	}
 
@@ -4304,7 +4319,9 @@ CreateTableStmt:
 			stmt.Partition = $8.(*ast.PartitionOptions)
 		}
 		stmt.OnDuplicate = $9.(ast.OnDuplicateKeyHandlingType)
-		stmt.Distributed = $11.(*ast.DistributedOptions)
+		if $11 != nil{
+			stmt.Distributed = $11.(*ast.DistributedOptions)
+		}
 		stmt.Select = $12.(*ast.CreateTableStmt).Select
 		if ($13 != nil && stmt.TemporaryKeyword != ast.TemporaryGlobal) || (stmt.TemporaryKeyword == ast.TemporaryGlobal && $13 == nil) {
 			yylex.AppendError(yylex.Errorf("GLOBAL TEMPORARY and ON COMMIT DELETE ROWS must appear together"))
@@ -12081,6 +12098,7 @@ TableElementListOpt:
 	}
 
 DistributedOpt:
+	/*empty*/
 	{
 		method := &ast.DistributedMethod{
 			Tp: ast.DistributedOptionDuplicate,
@@ -12088,10 +12106,10 @@ DistributedOpt:
 		$$ = &ast.DistributedOptions{
 			DistributedMethod: *method,
 			Default: true,
-			}
+		}
 	}
 |	"DISTRIBUTED" "BY" DistributedMethod
-	{
+	{		
 		$$ = $3
 	}
 
@@ -12104,6 +12122,7 @@ DistributedMethod:
 		$$ = &ast.DistributedOptions{
 			DistributedMethod: *method,
 			Definitions: $3.([]*ast.DistributedDefinition),
+			Default: false,
 		}
 	}
 |	"HASH" '(' ColumnNameList ')' '(' GroupNoList ')'
@@ -12115,6 +12134,7 @@ DistributedMethod:
 		$$ = &ast.DistributedOptions{
 			DistributedMethod: *method,
 			Definitions: $6.([]*ast.DistributedDefinition),
+			Default: false,
 		}		
 
 		// $$ = &ast.DistributedOptions{Tp: ast.DistributedOptionHash, Default: false}
@@ -12128,6 +12148,7 @@ DistributedMethod:
 		$$ = &ast.DistributedOptions{
 			DistributedMethod: *method,
 			Definitions: $6.([]*ast.DistributedDefinition),
+			Default: false,
 		}	
 		// $$ = &ast.DistributedOptions{Tp: ast.DistributedOptionList, Default: false}
 	}
@@ -12144,6 +12165,7 @@ DistributedMethod:
 		$$ = &ast.DistributedOptions{
 			DistributedMethod: *method,
 			Definitions: $6.([]*ast.DistributedDefinition),
+			Default: false,
 		}
 		// $$ = &ast.DistributedOptions{Tp: ast.DistributedOptionRange, Default: false}
 	}
@@ -12253,17 +12275,17 @@ TableOption:
 		$$ = &ast.TableOption{Tp: ast.TableOptionCollate, StrValue: $4,
 			UintValue: ast.TableOptionCharsetWithoutConvertTo}
 	}
-|	ForceOpt "AUTO_INCREMENT" EqOpt LengthNum
+|	"AUTO_INCREMENT" EqOpt LengthNum
 	{
-		$$ = &ast.TableOption{Tp: ast.TableOptionAutoIncrement, UintValue: $4.(uint64), BoolValue: $1.(bool)}
+		$$ = &ast.TableOption{Tp: ast.TableOptionAutoIncrement, UintValue: $3.(uint64), BoolValue: false}
 	}
 |	"AUTO_ID_CACHE" EqOpt LengthNum
 	{
 		$$ = &ast.TableOption{Tp: ast.TableOptionAutoIdCache, UintValue: $3.(uint64)}
 	}
-|	ForceOpt "AUTO_RANDOM_BASE" EqOpt LengthNum
+|	"AUTO_RANDOM_BASE" EqOpt LengthNum
 	{
-		$$ = &ast.TableOption{Tp: ast.TableOptionAutoRandomBase, UintValue: $4.(uint64), BoolValue: $1.(bool)}
+		$$ = &ast.TableOption{Tp: ast.TableOptionAutoRandomBase, UintValue: $3.(uint64), BoolValue: false}
 	}
 |	"AVG_ROW_LENGTH" EqOpt LengthNum
 	{

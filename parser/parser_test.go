@@ -2435,8 +2435,12 @@ func TestBuiltinFuncAsIdentifier(t *testing.T) {
 	runTests(true)
 }
 
-func TestDistributedSQL(t *testing.T) {
+func TestGDBDDL(t *testing.T) {
 	table := []testCase{
+		{"ALTER TABLE tmp CACHE", true, "ALTER TABLE `tmp` CACHE"},
+
+		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by duplicate(g1,g2,g3,g4,g5)", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY DUPLICATE (`g1`,`g2`,`g3`,`g4`,`g5`)"},
+
 		// base create table
 		{"CREATE TABLE T1 (id int primary key,name varchar(255) not null);", true, "CREATE TABLE `T1` (`id` INT PRIMARY KEY,`name` VARCHAR(255) NOT NULL)"},
 		{"CREATE TABLE foo (a int, b float); CREATE TABLE bar (x double, y float)", true, "CREATE TABLE `foo` (`a` INT,`b` FLOAT); CREATE TABLE `bar` (`x` DOUBLE,`y` FLOAT)"},
@@ -2448,14 +2452,21 @@ func TestDistributedSQL(t *testing.T) {
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by duplicate(g1,g2)", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY DUPLICATE (`g1`,`g2`)"},
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by duplicate(g1,g2,g3,g4,g5)", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY DUPLICATE (`g1`,`g2`,`g3`,`g4`,`g5`)"},
 
+		// GDB 限制: create table 不支持GTID为前缀的列
+		{"CREATE TABLE T1 (id int,gtid_name varchar(255)) distributed by duplicate(id)(g1,g2)", false, ""},
+
 		// distributed by hash
+		// hash 分片键支持全部类型（except TEXT\BLOB\ENUM\SET\BINARY\VARBINARY\UNSIGNED BIGINT\VARCHAR2
+		// GDB 限制: 不支持表达式和函数
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by hash()(g1,g2)", false, ""},
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by liner hash(id)(g1,g2)", false, ""},
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by hash(id+1)(g1,g2)", false, ""},
 
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by hash(id)(g1,g2)", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY HASH (`id`) (`g1`,`g2`)"},
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by hash(id,name)(g1,g2)", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY HASH (`id`,`name`) (`g1`,`g2`)"},
+		// TODO: 支持自定义hash
 
+		// GDB 限制: range 、list 分片键表达式的结果支持整数、时间函数、字符串类型
 		//distributed by list
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by list(id)(g1,g2)", false, ""},
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by list(id)()", false, ""},
@@ -2471,24 +2482,106 @@ func TestDistributedSQL(t *testing.T) {
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by list(id+1)(g1 values in (110,120),g2 values in (default))", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY LIST (`id`+1) (`g1` VALUES IN (110,120),`g2` VALUES IN (DEFAULT))"},
 
 		// distributed by range
+		// range 必须指定分片的数据范围
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id)(g1,g2)", false, ""},
+		// GDB限制：VALUES LESS THAN 与 左闭右开区间的形式不能混用
+		// {"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id)(g1 values less than (1),g2 [20,30))", false, ""},
 
-		// TODO: GDB range must match "values less than", is validate check needed?
+		// GDB 限制: 左闭右开区间各区间段不能重叠
+		// {"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id)(g1 [10,25),g2 [20,30))", false, ""},
+
+		// TODO: 支持多级分片表语法 case when 、subdistributed by
+		// 多级分片示例1
+		// DELIMITER //
+		// CREATE TABLE titles (
+		// 		id int primary key,
+		//		pub_date DATETIME)
+		// distributed by
+		// case YEAS(pub_date)
+		//  when 2019 then g1;
+		//  when 2018 then g2;
+		//  when 2017 then g3;
+		//  ELSE g4;
+		// END CASE; //
+		// DELIMITER;
+
+		// 多级分片示例2
+		// DELIMITER //
+		// CREATE TABLE titles (
+		// title_id INT NOT NULL,
+		// pub_id INT NOT NULL,
+		// cust_id INT NOT NULL,
+		// other_col varchar not null,
+		// primary key(title_id)
+		// ) distributed by
+		// case pub_id
+		// when 1 then
+		// 		case
+		// 		when cust_id<100 THEN SUBDISTRIBUTED BY HASH(title_id)(g1);
+		// 		else SUBDISTRIBUTED BY HASH(title_id)(g2);
+		// 		end case;
+		// when 2 then subdistributed by hash (title_id)(g3);
+		// else subdistributed by hash(title_id)(g4);
+		// end case;//
+		// DELIMITER ;
+
+		// GDB 限制: distributed by range 不能使用 range in
 		// {"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id)(g1 values in (100),g2 values in (200))", false, ""},
 		// {"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id)(g1 values in (100),g2 values in (200))", false, ""},
 		// {"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id)(g1 values less than (100),g2 values in (200))", false, ""},
 
-		// TODO: GDB range interval must increase strictly, is validate check needed?
+		// GDB 限制: range interval must increase strictly
 		// {"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id)(g1 values less than (200),g2 values less than (1))", false, ""},
 
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id)(g1 values less than (1),g2 values less than (2))", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY RANGE (`id`) (`g1` VALUES LESS THAN (1),`g2` VALUES LESS THAN (2))"},
 		// range(expr)
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id+1)(g1 values less than (1),g2 values less than (2))", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY RANGE (`id`+1) (`g1` VALUES LESS THAN (1),`g2` VALUES LESS THAN (2))"},
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id+1)(g1 values less than (1),g2 values less than maxvalue)", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY RANGE (`id`+1) (`g1` VALUES LESS THAN (1),`g2` VALUES LESS THAN MAXVALUE)"},
+		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(CONVERT(id,signed))(g1 values less than (1),g2 values less than maxvalue)", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY RANGE (CONVERT(`id`, SIGNED)) (`g1` VALUES LESS THAN (1),`g2` VALUES LESS THAN MAXVALUE)"},
+
 		// GDB [)
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id+1)(g1 [1,2),g2 [3,4))", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY RANGE (`id`+1) (`g1` [1,2),`g2` [3,4))"},
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id+1)(g1 [1,2)[5,6),g2 [3,4))", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY RANGE (`id`+1) (`g1` [1,2)[5,6),`g2` [3,4))"},
 		{"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id+1)(g1 [1,2)[5,6),g2 [3,4)[7,8))", true, "CREATE TABLE `T1` (`id` INT,`name` VARCHAR(255)) DISTRIBUTED BY RANGE (`id`+1) (`g1` [1,2)[5,6),`g2` [3,4)[7,8))"},
+
+		// ALTER TABLE using distributed
+		{"CREATE TABLE titles (id int key) distributed by list(id)(g1 values in(1,2) ,g2 values in(3,4))",
+			true,
+			"CREATE TABLE `titles` (`id` INT PRIMARY KEY) DISTRIBUTED BY LIST (`id`) (`g1` VALUES IN (1,2),`g2` VALUES IN (3,4))"},
+		{"ALTER TABLE t1 distributed by list(id)(g1 values in(1,2), g2 values in(3,4), g3 values in(default))",
+			true,
+			"ALTER TABLE `t1` DISTRIBUTED BY LIST (`id`) (`g1` VALUES IN (1,2),`g2` VALUES IN (3,4),`g3` VALUES IN (DEFAULT))"},
+		{"ALTER TABLE t1 distributed by list(id)(g1 values in(1,2), g2 values in(3,4,5), g3 values in(default))",
+			true,
+			"ALTER TABLE `t1` DISTRIBUTED BY LIST (`id`) (`g1` VALUES IN (1,2),`g2` VALUES IN (3,4,5),`g3` VALUES IN (DEFAULT))"},
+		// GDB 限制: 在线检测非扩展的修改分片界限值（需要获取alter 之前各分片的界限值，并与修改之后的界限做比较）
+
+		// create table if not exists t2(a int primary, b char(10) distributed by range(a)(g1 [0,100));
+		{"ALTER TABLE t2 distributed by range(a)(g1[0,100), g2[100,200))",
+			true,
+			"ALTER TABLE `t2` DISTRIBUTED BY RANGE (`a`) (`g1` [0,100),`g2` [100,200))"},
+
+		{"ALTER TABLE t16 distributed by list(a)(g1 values in (0,100), g2 values in (99,200))",
+			true,
+			"ALTER TABLE `t16` DISTRIBUTED BY LIST (`a`) (`g1` VALUES IN (0,100),`g2` VALUES IN (99,200))"},
+
+		// TODO: alter table distributed by ... force 语法
+		{"ALTER TABLE t16 distributed by list(a)(g1 values in (0,100), g2 values in (99,200)) force",
+			true,
+			"ALTER TABLE `t16` DISTRIBUTED BY LIST (`a`) (`g1` VALUES IN (0,100),`g2` VALUES IN (99,200)) FORCE"},
+
+		// TODO: 单机存储过程支持 distributed by
+		// 单机存储过程示例：
+		// DELIMITER //
+		// CREATE procedure simpleproc (IN a INT, OUT param1 INT)
+		// BEGIN
+		// INSERT INTO t VALUES(@a);
+		// SELECT COUNT(*) INTO param1 FROM t;
+		// END
+		// DISTRIBUTED BY DUPLICATE(g1)
+		// END //
+		// DELIMITER ;
+		// CALL simpleproc(10,@b);
 	}
 	RunTest(t, table, false)
 }
@@ -3164,8 +3257,8 @@ func TestDDL(t *testing.T) {
 		{"ALTER TABLE t shard_row_id_bits = 1", true, "ALTER TABLE `t` SHARD_ROW_ID_BITS = 1"},
 		{"ALTER TABLE t AUTO_INCREMENT 3", true, "ALTER TABLE `t` AUTO_INCREMENT = 3"},
 		{"ALTER TABLE t AUTO_INCREMENT = 3", true, "ALTER TABLE `t` AUTO_INCREMENT = 3"},
-		{"ALTER TABLE t FORCE AUTO_INCREMENT 3", true, "ALTER TABLE `t` FORCE AUTO_INCREMENT = 3"},
-		{"ALTER TABLE t FORCE AUTO_INCREMENT = 3", true, "ALTER TABLE `t` FORCE AUTO_INCREMENT = 3"},
+		// {"ALTER TABLE t FORCE AUTO_INCREMENT 3", true, "ALTER TABLE `t` FORCE AUTO_INCREMENT = 3"},// tidb only
+		// {"ALTER TABLE t FORCE AUTO_INCREMENT = 3", true, "ALTER TABLE `t` FORCE AUTO_INCREMENT = 3"},// tidb only
 		{"ALTER TABLE `hello-world@dev`.`User` ADD COLUMN `name` mediumtext CHARACTER SET UTF8MB4 COLLATE UTF8MB4_UNICODE_CI NOT NULL , ALGORITHM = DEFAULT;", true, "ALTER TABLE `hello-world@dev`.`User` ADD COLUMN `name` MEDIUMTEXT CHARACTER SET UTF8MB4 COLLATE utf8mb4_unicode_ci NOT NULL, ALGORITHM = DEFAULT"},
 		{"ALTER TABLE `hello-world@dev`.`User` ADD COLUMN `name` mediumtext CHARACTER SET UTF8MB4 COLLATE UTF8MB4_UNICODE_CI NOT NULL , ALGORITHM = INPLACE;", true, "ALTER TABLE `hello-world@dev`.`User` ADD COLUMN `name` MEDIUMTEXT CHARACTER SET UTF8MB4 COLLATE utf8mb4_unicode_ci NOT NULL, ALGORITHM = INPLACE"},
 		{"ALTER TABLE `hello-world@dev`.`User` ADD COLUMN `name` mediumtext CHARACTER SET UTF8MB4 COLLATE UTF8MB4_UNICODE_CI NOT NULL , ALGORITHM = COPY;", true, "ALTER TABLE `hello-world@dev`.`User` ADD COLUMN `name` MEDIUMTEXT CHARACTER SET UTF8MB4 COLLATE utf8mb4_unicode_ci NOT NULL, ALGORITHM = COPY"},
@@ -3181,7 +3274,7 @@ func TestDDL(t *testing.T) {
 		{"alter table d_n.t_n convert to char set default", true, "ALTER TABLE `d_n`.`t_n` CONVERT TO CHARACTER SET DEFAULT"},
 		{"alter table d_n.t_n convert to character set default collate utf8mb4_0900_ai_ci", true, "ALTER TABLE `d_n`.`t_n` CONVERT TO CHARACTER SET DEFAULT COLLATE UTF8MB4_0900_AI_CI"},
 
-		{"ALTER TABLE t FORCE", true, "ALTER TABLE `t` FORCE /* AlterTableForce is not supported */ "},
+		// {"ALTER TABLE t FORCE", true, "ALTER TABLE `t` FORCE /* AlterTableForce is not supported */ "},// tidb\mysql only
 		{"ALTER TABLE t DROP INDEX;", false, "ALTER TABLE `t` DROP INDEX"},
 		{"ALTER TABLE t DROP INDEX a", true, "ALTER TABLE `t` DROP INDEX `a`"},
 		{"ALTER TABLE t DROP INDEX IF EXISTS a", true, "ALTER TABLE `t` DROP INDEX IF EXISTS `a`"},
@@ -3707,8 +3800,8 @@ func TestDDL(t *testing.T) {
 		{"create table t (a bigint primary key auto_random(4), b varchar(100)) auto_random_base 200", true, "CREATE TABLE `t` (`a` BIGINT PRIMARY KEY AUTO_RANDOM(4),`b` VARCHAR(100)) AUTO_RANDOM_BASE = 200"},
 		{"alter table t auto_random_base = 50", true, "ALTER TABLE `t` AUTO_RANDOM_BASE = 50"},
 		{"alter table t auto_increment 30, auto_random_base 40", true, "ALTER TABLE `t` AUTO_INCREMENT = 30, AUTO_RANDOM_BASE = 40"},
-		{"alter table t force auto_random_base = 50", true, "ALTER TABLE `t` FORCE AUTO_RANDOM_BASE = 50"},
-		{"alter table t auto_increment 30, force auto_random_base 40", true, "ALTER TABLE `t` AUTO_INCREMENT = 30, FORCE AUTO_RANDOM_BASE = 40"},
+		// {"alter table t force auto_random_base = 50", true, "ALTER TABLE `t` FORCE AUTO_RANDOM_BASE = 50"},// tidb only
+		// {"alter table t auto_increment 30, force auto_random_base 40", true, "ALTER TABLE `t` AUTO_INCREMENT = 30, FORCE AUTO_RANDOM_BASE = 40"},// tidb only
 
 		// for alter sequence
 		{"alter sequence seq", false, ""},
