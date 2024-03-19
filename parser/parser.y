@@ -127,6 +127,8 @@ import (
 	distinct          "DISTINCT"
 	distinctRow       "DISTINCTROW"
 	distributed		  "DISTRIBUTED"
+	/* gdb 多级分片关键字 subdistributed */
+	subDistributed    "SUBDISTRIBUTED"
 	div               "DIV"
 	doubleType        "DOUBLE"
 	drop              "DROP"
@@ -1129,6 +1131,11 @@ import (
 	DistributedDefinition					"GDB DistributedDefinition"
 	GroupNoList							   "GDB GroupNoList"
 	AlterDistributedOpt					   "GDB Alter Table DistributedOpt"
+	DCaseWhenMethod						   "GDB distributed case when..."
+	DWhenClauseList						   "GDB distributed case when clause list"
+	DWhenClause							   "GDB distributed case when clause"
+	SubdistributedOpt					   "GDB distributed case... when... then subdistributed by clause"
+	DElseOpt							   "GDB distributed case when ... then ... else..."
 	DefaultFalseDistinctOpt                "Distinct option which defaults to false"
 	DefaultTrueDistinctOpt                 "Distinct option which defaults to true"
 	BuggyDefaultFalseDistinctOpt           "Distinct option which accepts DISTINCT ALL and defaults to false"
@@ -12106,6 +12113,7 @@ DistributedOpt:
 		$$ = &ast.DistributedOptions{
 			DistributedMethod: *method,
 			Default: true,
+			IsSubdistributed:false,
 		}
 	}
 |	"DISTRIBUTED" "BY" DistributedMethod
@@ -12123,6 +12131,7 @@ DistributedMethod:
 			DistributedMethod: *method,
 			Definitions: $3.([]*ast.DistributedDefinition),
 			Default: false,
+			IsSubdistributed:false,
 		}
 	}
 |	"HASH" '(' ColumnNameList ')' '(' GroupNoList ')'
@@ -12135,9 +12144,8 @@ DistributedMethod:
 			DistributedMethod: *method,
 			Definitions: $6.([]*ast.DistributedDefinition),
 			Default: false,
+			IsSubdistributed:false,
 		}		
-
-		// $$ = &ast.DistributedOptions{Tp: ast.DistributedOptionHash, Default: false}
 	}
 |	"LIST" '(' Expression ')' '(' DistributedDefinitionList ')'
 	{
@@ -12149,25 +12157,209 @@ DistributedMethod:
 			DistributedMethod: *method,
 			Definitions: $6.([]*ast.DistributedDefinition),
 			Default: false,
+			IsSubdistributed:false,
 		}	
-		// $$ = &ast.DistributedOptions{Tp: ast.DistributedOptionList, Default: false}
 	}
 |	"RANGE" '(' Expression ')' '(' DistributedDefinitionList ')'
 	{
-		// colList := []*ast.ColumnName{
-		// 	$3.(*ast.ColumnName),
-		// }
 		method := &ast.DistributedMethod{
 				Tp: ast.DistributedOptionRange,
-				// ColumnNames:   colList,
 				Expr: $3.(ast.ExprNode),
 			}
 		$$ = &ast.DistributedOptions{
 			DistributedMethod: *method,
 			Definitions: $6.([]*ast.DistributedDefinition),
 			Default: false,
+			IsSubdistributed:false,
 		}
-		// $$ = &ast.DistributedOptions{Tp: ast.DistributedOptionRange, Default: false}
+	}
+|	DCaseWhenMethod
+	{
+		method := &ast.DistributedMethod {
+			Tp: ast.DistributedOptionMultiple,
+		}
+		$$ = &ast.DistributedOptions {
+			DistributedMethod: *method,
+			Default: false,
+			IsSubdistributed: false,
+			DistributionCaseClauses: $1.(*ast.DCaseExpr),
+		}
+	}
+
+DCaseWhenMethod:
+	"CASE" ExpressionOpt DWhenClauseList DElseOpt "END" "CASE"
+	{
+		// 多几分片语法一：distributed by case YEAR(col1) when 2019 then g1 when 2018 then g2 else g3 end case;
+		// 多级分片语法二：distributed by case number_id when 1 then subdistributed by hash(number_id)...
+		x := &ast.DCaseExpr{WhenClauses: $3.([]*ast.DWhenClause)}
+		if $2 != nil {
+			x.Value = $2
+		}
+		if $4 != nil {
+			x.ElseClause = $4.(*ast.DElseClause)
+		}
+		$$ = x
+
+	}
+// |	"CASE" ExpressionOpt "WHEN" Expression "THEN" DCaseWhenMethod DElseOpt "END" "CASE"
+// 	{
+// 				// 多级分片语法三：
+// 		// distributed by 
+// 		//  case number_id 
+// 		//	when 1 then 
+// 		// 		case
+// 		// 			when age>18
+// 		//      		then subdistributed by hash(age)(g1) 
+// 		// 	    	else subdistributed by hash(age)(g2)
+// 		// 		end case
+// 		//	when 2 then...
+// 		// 	else
+// 		// 		case
+// 		// 		when YEAR(birthday) > 2000
+// 		// 			then g1
+// 		// 		else
+// 		// 			g2
+// 		// 		end case
+// 		//	end case
+// 		x := &ast.DCaseExpr{}
+// 		if $2 != nil {
+// 			x.Value = $2
+// 		}
+// 		when := &ast.DWhenClause{
+// 			Expr: $4.(ast.ExprNode),
+// 		}
+
+// 		// when then 子句中嵌套 case 语句
+// 		if $6 != nil {
+// 			when.InnerCaseClause = $6.(*ast.DCaseExpr)
+// 		}
+// 		x.WhenClauses = append(x.WhenClauses, when)
+
+// 		if $7 != nil {
+// 			x.ElseClause = $7.(*ast.DElseClause)
+// 		}
+
+// 		$$ = x
+// 	}
+
+
+DWhenClauseList:
+	DWhenClause
+	{
+		list := make([]*ast.DWhenClause, 0)
+		$$ = append(list, $1.(*ast.DWhenClause))
+	}
+|	DWhenClauseList DWhenClause
+	{
+		list := $1.([]*ast.DWhenClause)
+		$$ = append(list, $2.(*ast.DWhenClause))
+	}
+
+DWhenClause:
+	"WHEN" Expression "THEN" Identifier
+	{
+		if model.NewCIStr($4).String() == "subdistributed" || model.NewCIStr($4).String() == "SUBDISTRIBUTED" {
+			panic("then subdistributed be catched unexpected")
+		}
+		// 多级分片语法一
+		$$ = &ast.DWhenClause{
+			Expr: $2.(ast.ExprNode),
+			GroupNo: model.NewCIStr($4),
+		}		
+	}
+|	"WHEN" Expression "THEN" SubdistributedOpt
+	{
+		// 多级分片语法二
+		$$ = &ast.DWhenClause{
+			Expr: $2.(ast.ExprNode),
+			SubdistributedOpts: $4.(*ast.DistributedOptions),
+		}
+	}
+|	"WHEN" Expression "THEN" DCaseWhenMethod
+	{
+	// 多级分片语法三：嵌套
+		$$ = &ast.DWhenClause{
+			Expr: $2.(ast.ExprNode),
+			InnerCaseClause: $4.(*ast.DCaseExpr),
+		}
+	}
+
+SubdistributedOpt:
+	"SUBDISTRIBUTED" "BY" "DUPLICATE" '(' GroupNoList ')'
+	{
+		method := &ast.DistributedMethod{
+					Tp: ast.DistributedOptionDuplicate,
+				}
+		$$ = &ast.DistributedOptions{
+			DistributedMethod: *method,
+			Definitions: $5.([]*ast.DistributedDefinition),
+			Default: false,
+			IsSubdistributed: true,
+		}
+	}
+|	"SUBDISTRIBUTED" "BY" "HASH" '(' ColumnNameList ')' '(' GroupNoList ')'
+	{
+		method := &ast.DistributedMethod{
+			Tp: ast.DistributedOptionHash,
+			ColumnNames:   $5.([]*ast.ColumnName),
+		}
+		$$ = &ast.DistributedOptions{
+			DistributedMethod: *method,
+			Definitions: $8.([]*ast.DistributedDefinition),
+			Default: false,
+			IsSubdistributed: true,
+		}	
+	}
+|	"SUBDISTRIBUTED" "BY" "LIST" '(' Expression ')' '(' DistributedDefinitionList ')'
+	{
+		method := &ast.DistributedMethod{
+				Tp: ast.DistributedOptionList,
+				Expr: $5.(ast.ExprNode),
+			}
+		$$ = &ast.DistributedOptions{
+			DistributedMethod: *method,
+			Definitions: $8.([]*ast.DistributedDefinition),
+			Default: false,
+			IsSubdistributed: true,
+		}	
+	}
+|	"SUBDISTRIBUTED" "BY" "RANGE" '(' Expression ')' '(' DistributedDefinitionList ')'
+	{
+		method := &ast.DistributedMethod{
+				Tp: ast.DistributedOptionRange,
+				// ColumnNames:   colList,
+				Expr: $5.(ast.ExprNode),
+			}
+		$$ = &ast.DistributedOptions{
+			DistributedMethod: *method,
+			Definitions: $8.([]*ast.DistributedDefinition),
+			Default: false,
+			IsSubdistributed: true,
+		}
+	}
+
+DElseOpt:
+	/* empty */
+	{
+		$$ = nil
+	}
+|	"ELSE" Identifier
+	{
+		$$ = &ast.DElseClause{
+			GroupNo: model.NewCIStr($2),
+		}
+	}
+|	"ELSE" SubdistributedOpt
+	{
+		$$ = &ast.DElseClause{
+			SubdistributedOpts:$2.(*ast.DistributedOptions),
+		}
+	}
+|	"ELSE" DCaseWhenMethod
+	{
+		$$ = &ast.DElseClause{
+			InnerCaseClause:$2.(*ast.DCaseExpr),
+		}
 	}
 
 DistributedDefinitionList:
@@ -12187,7 +12379,7 @@ GroupNoList:
 	Identifier
 	{
 		list := make([]*ast.DistributedDefinition, 0)
-		def := &ast.DistributedDefinition{
+		def := &ast.DistributedDefinition {
 			Name:   model.NewCIStr($1),
 			Clause: &ast.DistributedDefinitionClauseNone{},
 		}

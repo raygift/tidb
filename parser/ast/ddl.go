@@ -4379,6 +4379,7 @@ const (
 	DistributedOptionRange
 	DistributedOptionHash
 	DistributedOptionList
+	DistributedOptionMultiple
 )
 
 type DistributedMethod struct {
@@ -4386,7 +4387,8 @@ type DistributedMethod struct {
 	// distributed definitions
 	node
 	// Tp is the type of the distributed function
-	// 可取值为 duplicate，hash，range，list
+	// 可取值为 duplicate，hash，range，list，
+	// 多级分片语法时，Tp 为 Multiple，restore 时
 	Tp DistributedOptionType
 	// Expr is an expression used as argument of RANGE AND LIST types
 	// GDB RANGE 和 LIST 支持表达式作为分片键
@@ -4527,6 +4529,154 @@ func (n *DistributedDefinitionClauseBetween) Validate(dt DistributedOptionType, 
 	return nil
 }
 
+// DWhenClause is the when clause in Case expression for "distributed by case ... when condition then result".
+type DWhenClause struct {
+	node
+	// Expr is the condition expression in WhenClause.
+	Expr ExprNode
+	// Result is the result expression in distributed WhenClause.
+	// example1: "when 1>0 then g1"
+	// when then 子句直接指定分片组名
+	GroupNo model.CIStr
+	// example2: "when YEAR(y)>2000 then subdistributed by HASH(id)(g1,g2)"
+	//  when then 子句中指定分片类型及对应组名
+	SubdistributedOpts *DistributedOptions
+	// example3: "when 1>0 then case YEAR(birthday) >2000 then g1 else g2 end case else g3 end case"
+	// when then 子句中嵌套 case 语句
+	InnerCaseClause *DCaseExpr
+}
+
+type DElseClause struct {
+	// Result is the result expression in distributed Else Clause.
+	// example1: "else g1"
+	GroupNo model.CIStr
+	// example2: "else subdistributed by HASH(id)(g1,g2)"
+	SubdistributedOpts *DistributedOptions
+	// example3
+	InnerCaseClause *DCaseExpr
+}
+
+// DCaseExpr is the case expression in distributed by clause.
+type DCaseExpr struct {
+	exprNode
+	// Value is the compare value expression.
+	Value ExprNode
+	// DWhenClauses is the condition check expression.
+	WhenClauses []*DWhenClause
+	// ElseClause is the else result expression.
+	ElseClause *DElseClause
+}
+
+func (n *DCaseExpr) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord("CASE")
+	if n.Value != nil {
+		ctx.WritePlain(" ")
+		if err := n.Value.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore CaseExpr.Value")
+		}
+	}
+	for _, clause := range n.WhenClauses {
+		ctx.WritePlain(" ")
+		if err := clause.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore CaseExpr.WhenClauses")
+		}
+	}
+	if n.ElseClause != nil {
+		ctx.WriteKeyWord(" ELSE ")
+		if err := n.ElseClause.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore CaseExpr.ElseClause")
+		}
+	}
+	ctx.WriteKeyWord(" END CASE")
+	return nil
+}
+
+// Restore implements Node interface.
+func (n *DWhenClause) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord("WHEN ")
+	if err := n.Expr.Restore(ctx); err != nil {
+		return errors.Annotate(err, "An error occurred while restore WhenClauses.Expr")
+	}
+	ctx.WriteKeyWord(" THEN ")
+	if len(n.GroupNo.O) != 0 {
+		// 只有多级分片example1 时才有实际内容
+		ctx.WriteName(n.GroupNo.O)
+	}
+
+	// 多级分片example2
+	if n.SubdistributedOpts != nil {
+		if err := n.SubdistributedOpts.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore WhenClauses.SubdistributedOpts")
+		}
+	}
+
+	// 多级分片example3，嵌套case
+	if n.InnerCaseClause != nil {
+		if err := n.InnerCaseClause.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore WhenClauses.InnerCaseClause")
+		}
+	}
+	return nil
+}
+
+func (n *DElseClause) Restore(ctx *format.RestoreCtx) error {
+	if len(n.GroupNo.O) != 0 {
+		// 只有多级分片语法 "else g1" 时才有实际内容
+		ctx.WriteName(n.GroupNo.O)
+	}
+
+	// 多级分片example2，"else subdistributed by ..."
+	if n.SubdistributedOpts != nil {
+		if err := n.SubdistributedOpts.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore WhenClauses.SubdistributedOpts")
+		}
+	}
+
+	// 多级分片example3，嵌套case，"else case ... end case "
+	if n.InnerCaseClause != nil {
+		if err := n.InnerCaseClause.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore WhenClauses.InnerCaseClause")
+		}
+	}
+	return nil
+}
+
+// // Accept implements Node Accept interface.
+// func (n *DWhenClause) Accept(v Visitor) (Node, bool) {
+// 	newNode, skipChildren := v.Enter(n)
+// 	if skipChildren {
+// 		return v.Leave(newNode)
+// 	}
+
+// 	n = newNode.(*WhenClause)
+// 	node, ok := n.Expr.Accept(v)
+// 	if !ok {
+// 		return n, false
+// 	}
+// 	n.Expr = node.(ExprNode)
+
+// 	node, ok = n.Result.Accept(v)
+// 	if !ok {
+// 		return n, false
+// 	}
+// 	n.Result = node.(ExprNode)
+// 	return v.Leave(n)
+// }
+
+// 多级分片
+type DistributedDefinitionClauseMultiple struct {
+}
+
+func (n *DistributedDefinitionClauseMultiple) restore(ctx *format.RestoreCtx) error {
+	return nil
+}
+func (n *DistributedDefinitionClauseMultiple) acceptInPlace(v Visitor) bool {
+	return true
+}
+func (n *DistributedDefinitionClauseMultiple) Validate(dt DistributedOptionType, columns int) error {
+	return nil
+}
+
 // DistributedDefinition defines a single distribution.
 type DistributedDefinition struct {
 	// GDB 使用 g1,g2...或 G1,G2 作为存储安全组名(GroupNo)
@@ -4549,8 +4699,10 @@ type DistributedOptions struct {
 	DistributedMethod
 	Definitions []*DistributedDefinition
 	// Tp          DistributedOptionType
-	Default  bool
-	StrValue string
+	Default                 bool
+	StrValue                string
+	IsSubdistributed        bool       // 用于区分 subdistributed by 后的 hash/range/list/duplicate 子句
+	DistributionCaseClauses *DCaseExpr // 保存多级分片时，最外层case子句（when 和 else 中可能会嵌套 case子句）
 }
 
 func (d DistributedOptionType) String() string {
@@ -4601,52 +4753,65 @@ func (n *DistributedOptions) Restore(ctx *format.RestoreCtx) error {
 	if n.Default {
 		return nil
 	}
+	if n.IsSubdistributed { // 多级分片时，标志是否为内层分片方法的标志位，内层分片语法关键字为 subdistributed by
+		ctx.WriteKeyWord("SUBDISTRIBUTED BY")
+	} else {
+		ctx.WriteKeyWord("DISTRIBUTED BY")
+	}
+
 	switch n.Tp {
 	case DistributedOptionDuplicate:
-		ctx.WriteKeyWord("DISTRIBUTED BY DUPLICATE")
-
+		ctx.WriteKeyWord(" DUPLICATE")
 	case DistributedOptionRange:
-		ctx.WriteKeyWord("DISTRIBUTED BY RANGE")
+		ctx.WriteKeyWord(" RANGE")
 	case DistributedOptionHash:
-		ctx.WriteKeyWord("DISTRIBUTED BY HASH")
+		ctx.WriteKeyWord(" HASH")
 	case DistributedOptionList:
-		ctx.WriteKeyWord("DISTRIBUTED BY LIST")
-
+		ctx.WriteKeyWord(" LIST")
+	case DistributedOptionMultiple: // distributed by 后是多级分片 case 语法时，分片类型为 DistributedOptionMultiple
+		ctx.WritePlain(" ")
 	default:
 		return errors.Errorf("invalid DistributedOptionType: %d", n.Tp)
 	}
-	if n.ColumnNames != nil {
-		ctx.WritePlain(" (")
-		for i, col := range n.ColumnNames {
-			if i > 0 {
-				ctx.WritePlain(",")
-			}
-			if err := col.Restore(ctx); err != nil {
-				return errors.Annotatef(err, "An error occurred while splicing DistributedMethod.ColumnName[%d]", i)
-			}
-		}
-		ctx.WritePlain(")")
+	if n.DistributionCaseClauses != nil { // distributed by 后是多级分片 case 语法时，case 语法所有信息被存入 DistributionCaseClauses 部分
+		if err := n.DistributionCaseClauses.Restore(ctx); err != nil {
+			return errors.Annotatef(err, "An error occurred while restore DistributionCaseClauses")
 
-	}
-	if n.Expr != nil {
-		ctx.WritePlain(" (")
-		if err := n.Expr.Restore(ctx); err != nil {
-			return errors.Annotate(err, "An error occurred while restore DistributedMethod.Expr")
 		}
-		ctx.WritePlain(")")
-	}
+	} else { // distirbuted by hash/range/list/duplicate ，只有一级分片
+		if n.ColumnNames != nil {
+			ctx.WritePlain(" (")
+			for i, col := range n.ColumnNames {
+				if i > 0 {
+					ctx.WritePlain(",")
+				}
+				if err := col.Restore(ctx); err != nil {
+					return errors.Annotatef(err, "An error occurred while splicing DistributedMethod.ColumnName[%d]", i)
+				}
+			}
+			ctx.WritePlain(")")
 
-	if n.Definitions != nil {
-		ctx.WritePlain(" (")
-		for i, def := range n.Definitions {
-			if i != 0 {
-				ctx.WritePlain(",")
-			}
-			if err := def.Restore(ctx); err != nil {
-				return errors.Annotatef(err, "An error occurred while restore AlterTableSpec.PartDefinitions[%d]", i)
-			}
 		}
-		ctx.WritePlain(")")
+		if n.Expr != nil {
+			ctx.WritePlain(" (")
+			if err := n.Expr.Restore(ctx); err != nil {
+				return errors.Annotate(err, "An error occurred while restore DistributedMethod.Expr")
+			}
+			ctx.WritePlain(")")
+		}
+
+		if n.Definitions != nil {
+			ctx.WritePlain(" (")
+			for i, def := range n.Definitions {
+				if i != 0 {
+					ctx.WritePlain(",")
+				}
+				if err := def.Restore(ctx); err != nil {
+					return errors.Annotatef(err, "An error occurred while restore AlterTableSpec.PartDefinitions[%d]", i)
+				}
+			}
+			ctx.WritePlain(")")
+		}
 	}
 
 	return nil

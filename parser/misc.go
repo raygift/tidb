@@ -763,6 +763,7 @@ var tokenMap = map[string]int{
 	"STRICT_FORMAT":            strictFormat,
 	"STRONG":                   strong,
 	"SUBDATE":                  subDate,
+	"SUBDISTRIBUTED":           subDistributed,
 	"SUBJECT":                  subject,
 	"SUBPARTITION":             subpartition,
 	"SUBPARTITIONS":            subpartitions,

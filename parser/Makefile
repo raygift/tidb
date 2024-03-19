@@ -11,7 +11,7 @@ parser: parser.go hintparser.go
 %arser.go: %arser.y bin/goyacc
 	@echo "bin/goyacc -o $@ -p yy$(prefix) -t $(prefix)Parser $<"
 	@bin/goyacc -o $@ -p yy$(prefix) -t $(prefix)Parser $< || ( rm -f $@ && echo 'Please check y.output for more information' && exit 1 )
-	@rm -f y.output
+	# @rm -f y.output
 
 %arser_golden.y: %arser.y
 	@bin/goyacc -fmt -fmtout $@ $<

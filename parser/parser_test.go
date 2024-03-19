@@ -2490,40 +2490,47 @@ func TestGDBDDL(t *testing.T) {
 		// GDB 限制: 左闭右开区间各区间段不能重叠
 		// {"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id)(g1 [10,25),g2 [20,30))", false, ""},
 
+		// mysql CASE WHEN test
+		{"SELECT CASE WHEN 1>0 THEN 1 ELSE 0 END", true, "SELECT CASE WHEN 1>0 THEN 1 ELSE 0 END"},
 		// TODO: 支持多级分片表语法 case when 、subdistributed by
 		// 多级分片示例1
-		// DELIMITER //
-		// CREATE TABLE titles (
-		// 		id int primary key,
-		//		pub_date DATETIME)
-		// distributed by
-		// case YEAS(pub_date)
-		//  when 2019 then g1;
-		//  when 2018 then g2;
-		//  when 2017 then g3;
-		//  ELSE g4;
-		// END CASE; //
-		// DELIMITER;
-
-		// 多级分片示例2
-		// DELIMITER //
-		// CREATE TABLE titles (
-		// title_id INT NOT NULL,
-		// pub_id INT NOT NULL,
-		// cust_id INT NOT NULL,
-		// other_col varchar not null,
-		// primary key(title_id)
-		// ) distributed by
-		// case pub_id
-		// when 1 then
-		// 		case
-		// 		when cust_id<100 THEN SUBDISTRIBUTED BY HASH(title_id)(g1);
-		// 		else SUBDISTRIBUTED BY HASH(title_id)(g2);
-		// 		end case;
-		// when 2 then subdistributed by hash (title_id)(g3);
-		// else subdistributed by hash(title_id)(g4);
-		// end case;//
-		// DELIMITER ;
+		{
+			"CREATE TABLE titles (id int primary key,pub_date DATETIME) distributed by case YEAR(pub_date) when 2019 then g1 when 2018 then g2 when 2017 then g3 ELSE g4 END CASE",
+			true,
+			"CREATE TABLE `titles` (`id` INT PRIMARY KEY,`pub_date` DATETIME) DISTRIBUTED BY CASE YEAR(`pub_date`) WHEN 2019 THEN `g1` WHEN 2018 THEN `g2` WHEN 2017 THEN `g3` ELSE `g4` END CASE",
+		},
+		// 多级分片示例2 subdistributed by
+		{
+			"CREATE TABLE titles (id int primary key,pub_date DATETIME) distributed by case YEAR(pub_date) when 2019 then subdistributed by HASH(id)(g1,g2) else subdistributed by HASH(id)(g3,g4) end case",
+			true,
+			"CREATE TABLE `titles` (`id` INT PRIMARY KEY,`pub_date` DATETIME) DISTRIBUTED BY CASE YEAR(`pub_date`) WHEN 2019 THEN SUBDISTRIBUTED BY HASH (`id`) (`g1`,`g2`) ELSE SUBDISTRIBUTED BY HASH (`id`) (`g3`,`g4`) END CASE",
+		},
+		// 多级分片 嵌套
+		{
+			"CREATE TABLE titles (id int primary key,pub_date DATETIME) distributed by case YEAR(pub_date) when 2019 then case when id = 1 then g1 else g2 end case when 2018 then g2 when 2017 then g3 ELSE g4 END CASE",
+			true,
+			"CREATE TABLE `titles` (`id` INT PRIMARY KEY,`pub_date` DATETIME) DISTRIBUTED BY CASE YEAR(`pub_date`) WHEN 2019 THEN CASE WHEN `id`=1 THEN `g1` ELSE `g2` END CASE WHEN 2018 THEN `g2` WHEN 2017 THEN `g3` ELSE `g4` END CASE",
+		},
+		{
+			"CREATE TABLE titles (id int primary key,pub_date DATETIME) distributed by case YEAR(pub_date) when 2019 then case when id = 1 then subdistributed by HASH(id)(g1,g2) else g3 end case when 2018 then g2 when 2017 then g3 ELSE g4 END CASE",
+			true,
+			"CREATE TABLE `titles` (`id` INT PRIMARY KEY,`pub_date` DATETIME) DISTRIBUTED BY CASE YEAR(`pub_date`) WHEN 2019 THEN CASE WHEN `id`=1 THEN SUBDISTRIBUTED BY HASH (`id`) (`g1`,`g2`) ELSE `g3` END CASE WHEN 2018 THEN `g2` WHEN 2017 THEN `g3` ELSE `g4` END CASE",
+		},
+		// 多级分片示例 7.1.3 subdistributed by hash
+		{"CREATE TABLE titles (title_id INT NOT NULL,pub_id INT NOT NULL,cust_id INT NOT NULL,other_col varchar(10) not null,primary key(title_id)) distributed by case pub_id when 1 then case when cust_id<100 THEN SUBDISTRIBUTED BY HASH(title_id)(g1) else SUBDISTRIBUTED BY HASH(title_id)(g2) end case when 2 then subdistributed by hash(title_id)(g3) else subdistributed by hash(title_id)(g4) end case",
+			true,
+			"CREATE TABLE `titles` (`title_id` INT NOT NULL,`pub_id` INT NOT NULL,`cust_id` INT NOT NULL,`other_col` VARCHAR(10) NOT NULL,PRIMARY KEY(`title_id`)) DISTRIBUTED BY CASE `pub_id` WHEN 1 THEN CASE WHEN `cust_id`<100 THEN SUBDISTRIBUTED BY HASH (`title_id`) (`g1`) ELSE SUBDISTRIBUTED BY HASH (`title_id`) (`g2`) END CASE WHEN 2 THEN SUBDISTRIBUTED BY HASH (`title_id`) (`g3`) ELSE SUBDISTRIBUTED BY HASH (`title_id`) (`g4`) END CASE",
+		},
+		// 多级分片示例 7.1.3 subdistributed by range/list/duplicate
+		{"CREATE table titles1(title_id int not null, cust_id int not null, pub_id int not null, primary key(title_id)) distributed by case pub_id when 1 then case when cust_id<100 then subdistributed by range(title_id)(g1 [100,200)) else subdistributed by duplicate(g2) end case else subdistributed by list(title_id)(g3 values in (10,20,30)) end case",
+			true,
+			"CREATE TABLE `titles1` (`title_id` INT NOT NULL,`cust_id` INT NOT NULL,`pub_id` INT NOT NULL,PRIMARY KEY(`title_id`)) DISTRIBUTED BY CASE `pub_id` WHEN 1 THEN CASE WHEN `cust_id`<100 THEN SUBDISTRIBUTED BY RANGE (`title_id`) (`g1` [100,200)) ELSE SUBDISTRIBUTED BY DUPLICATE (`g2`) END CASE ELSE SUBDISTRIBUTED BY LIST (`title_id`) (`g3` VALUES IN (10,20,30)) END CASE",
+		},
+		// 多级分片示例 7.1.3 subdistributed by range/list/hash
+		{"CREATE table titles2(title_id int not null, cust_id int not null, pub_id int not null, primary key(title_id)) distributed by case pub_id when 1 then case when cust_id<100 then subdistributed by range(title_id)(g1 [100,200)) else subdistributed by hash(title)(g2) end case else subdistributed by list(title_id)(g3 values in (10,20,30)) end case",
+			true,
+			"CREATE TABLE `titles2` (`title_id` INT NOT NULL,`cust_id` INT NOT NULL,`pub_id` INT NOT NULL,PRIMARY KEY(`title_id`)) DISTRIBUTED BY CASE `pub_id` WHEN 1 THEN CASE WHEN `cust_id`<100 THEN SUBDISTRIBUTED BY RANGE (`title_id`) (`g1` [100,200)) ELSE SUBDISTRIBUTED BY HASH (`title`) (`g2`) END CASE ELSE SUBDISTRIBUTED BY LIST (`title_id`) (`g3` VALUES IN (10,20,30)) END CASE",
+		},
 
 		// GDB 限制: distributed by range 不能使用 range in
 		// {"CREATE TABLE T1 (id int,name varchar(255)) distributed by range(id)(g1 values in (100),g2 values in (200))", false, ""},
@@ -2570,6 +2577,25 @@ func TestGDBDDL(t *testing.T) {
 			true,
 			"ALTER TABLE `t16` DISTRIBUTED BY LIST (`a`) (`g1` VALUES IN (0,100),`g2` VALUES IN (99,200)) FORCE"},
 
+		// alter table 多级分片
+		// 7.6.2 例子18
+		{"ALTER TABLE titles distributed by case pub_id when 1 then case when cust_id<100 then subdistributed by range(title_id)(g1 [100,200),g4 [200,300)) else subdistributed by duplicate(g2) end case else subdistributed by list(title_id)(g3 values in (10,20,30)) end case",
+			true,
+			"ALTER TABLE `titles` DISTRIBUTED BY CASE `pub_id` WHEN 1 THEN CASE WHEN `cust_id`<100 THEN SUBDISTRIBUTED BY RANGE (`title_id`) (`g1` [100,200),`g4` [200,300)) ELSE SUBDISTRIBUTED BY DUPLICATE (`g2`) END CASE ELSE SUBDISTRIBUTED BY LIST (`title_id`) (`g3` VALUES IN (10,20,30)) END CASE",
+		},
+		// 7.6.2 例子19
+		{
+			"ALTER TABLE titles2 distributed by case pub_id when 1 then case when cust_id<100 then subdistributed by range(title_id)(g1 [100,200),g4 [200,300)) else subdistributed by hash(title_id)(g2) end case else subdistributed by list(title_id)(g3 values in (10,20,30),g4 values in (40,50)) end case",
+			true,
+			"ALTER TABLE `titles2` DISTRIBUTED BY CASE `pub_id` WHEN 1 THEN CASE WHEN `cust_id`<100 THEN SUBDISTRIBUTED BY RANGE (`title_id`) (`g1` [100,200),`g4` [200,300)) ELSE SUBDISTRIBUTED BY HASH (`title_id`) (`g2`) END CASE ELSE SUBDISTRIBUTED BY LIST (`title_id`) (`g3` VALUES IN (10,20,30),`g4` VALUES IN (40,50)) END CASE",
+		},
+		// TODO:不同分片不同分区管理， storagedb 关键字
+		// {"alter table t17 add partition(partition p4 values less than(500) storagedb g1,g2)",
+		// 	true,
+		// 	"ALTER TABLE `t17` ADD PARTITION (PARTITION `p4` VALUES LESS THAN (500) STORAGEDB `g1`,`g2`)"},
+
+		// TODO: alter table t1 truncate partition p0 update global indexes storagedb g1;
+
 		// TODO: 单机存储过程支持 distributed by
 		// 单机存储过程示例：
 		// DELIMITER //
@@ -2582,6 +2608,33 @@ func TestGDBDDL(t *testing.T) {
 		// END //
 		// DELIMITER ;
 		// CALL simpleproc(10,@b);
+
+		// TODO
+		// copy table
+		// COPY TABLE FROM tb1 TO tb2 STORAGEDB all;
+		// COPY TABLE FROM tb1 TO tb2 STORAGEDB g1;
+	}
+	RunTest(t, table, false)
+}
+
+func TestGDBDML(t *testing.T) {
+	table := []testCase{
+		// TODO
+		//
+	}
+	RunTest(t, table, false)
+}
+
+func TestGDBKeyWords(t *testing.T) {
+	table := []testCase{
+		// TODO
+		// PARITITIONSTORAGEDB
+		// STORAGEDB
+		// DISTRIBUTED BY
+		// DISTRIBUTED BY ... FORCE
+		// SUBDISTRIBUTED BY
+		// CONSISTENCY_OPTION: UR\CR\SW\CW
+		// SAMEDB
 	}
 	RunTest(t, table, false)
 }
