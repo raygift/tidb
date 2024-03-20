@@ -265,6 +265,7 @@ var tokenMap = map[string]int{
 	"COPY":                     copyKwd,
 	"CORRELATION":              correlation,
 	"CPU":                      cpu,
+	"CR":                       cr, // GDB
 	"CREATE":                   create,
 	"CROSS":                    cross,
 	"CSV_BACKSLASH_ESCAPE":     csvBackslashEscape,
@@ -283,6 +284,7 @@ var tokenMap = map[string]int{
 	"CURRENT":                  current,
 	"CURSOR":                   cursor,
 	"CURTIME":                  curTime,
+	"CW":                       cw, // GDB
 	"CYCLE":                    cycle,
 	"DATA":                     data,
 	"DATABASE":                 database,
@@ -757,6 +759,7 @@ var tokenMap = map[string]int{
 	"STDDEV":                   stddevPop,
 	"STOP":                     stop,
 	"STORAGE":                  storage,
+	"STORAGEDB":                storageDB, // GDB
 	"STORED":                   stored,
 	"STRAIGHT_JOIN":            straightJoin,
 	"STRICT":                   strict,
@@ -772,6 +775,7 @@ var tokenMap = map[string]int{
 	"SUM":                      sum,
 	"SUPER":                    super,
 	"SURVIVAL_PREFERENCES":     survivalPreferences,
+	"SW":                       sw, // GDB
 	"SWAPS":                    swaps,
 	"SWITCHES":                 switchesSym,
 	"SYSTEM":                   system,
@@ -844,6 +848,7 @@ var tokenMap = map[string]int{
 	"UNTIL":                    until,
 	"UNTIL_TS":                 untilTS,
 	"UPDATE":                   update,
+	"UR":                       ur, // GDB
 	"USAGE":                    usage,
 	"USE":                      use,
 	"USER":                     user,

@@ -2590,6 +2590,11 @@ func TestGDBDDL(t *testing.T) {
 			"ALTER TABLE `titles2` DISTRIBUTED BY CASE `pub_id` WHEN 1 THEN CASE WHEN `cust_id`<100 THEN SUBDISTRIBUTED BY RANGE (`title_id`) (`g1` [100,200),`g4` [200,300)) ELSE SUBDISTRIBUTED BY HASH (`title_id`) (`g2`) END CASE ELSE SUBDISTRIBUTED BY LIST (`title_id`) (`g3` VALUES IN (10,20,30),`g4` VALUES IN (40,50)) END CASE",
 		},
 		// TODO:不同分片不同分区管理， storagedb 关键字
+		// [x] select/update/delete
+		// []  explain
+		// [] alter table
+		// [] copy table
+		// [] show create table
 		// {"alter table t17 add partition(partition p4 values less than(500) storagedb g1,g2)",
 		// 	true,
 		// 	"ALTER TABLE `t17` ADD PARTITION (PARTITION `p4` VALUES LESS THAN (500) STORAGEDB `g1`,`g2`)"},
@@ -2619,8 +2624,33 @@ func TestGDBDDL(t *testing.T) {
 
 func TestGDBDML(t *testing.T) {
 	table := []testCase{
-		// TODO
-		//
+		// select / update / delete 使用 STORAGEDB 指定分片
+		{"select id from t1 storagedb g1", true, "SELECT `id` FROM `t1` STORAGEDB `g1`"},
+		{"select id from t1 group by id storagedb g1", true, "SELECT `id` FROM `t1` GROUP BY `id` STORAGEDB `g1`"},
+		{"select id from t1 where id = 1 storagedb g1,g2", true, "SELECT `id` FROM `t1` WHERE `id`=1 STORAGEDB `g1`,`g2`"},
+		{"select id from t1 where id = 1 storagedb g1,g2", true, "SELECT `id` FROM `t1` WHERE `id`=1 STORAGEDB `g1`,`g2`"},
+
+		// update storagedb 指定分片
+		{"update t1 set age = 18 where id = 10 storagedb g1,g2", true, "UPDATE `t1` SET `age`=18 WHERE `id`=10 STORAGEDB `g1`,`g2`"},
+
+		// delete storagedb 指定分片
+		{"delete from t1 storagedb g1", true, "DELETE FROM `t1` STORAGEDB `g1`"},
+		{"delete from t1 storagedb g1,g2", true, "DELETE FROM `t1` STORAGEDB `g1`,`g2`"},
+		{"delete from t1 where id = 1 storagedb g1,g2", true, "DELETE FROM `t1` WHERE `id`=1 STORAGEDB `g1`,`g2`"},
+
+		// 一致性选项
+		{"select id from t1 UR", true, "SELECT `id` FROM `t1` UR"},
+		{"select id from t1 where id = 1 sw storagedb g1,g2", true, "SELECT `id` FROM `t1` WHERE `id`=1 SW STORAGEDB `g1`,`g2`"},
+
+		{"update t1 set age = 18 where id = 10 SW", true, "UPDATE `t1` SET `age`=18 WHERE `id`=10 SW"},
+		{"update t1 set age = 18 where id = 10 cw storagedb g1,g2", true, "UPDATE `t1` SET `age`=18 WHERE `id`=10 CW STORAGEDB `g1`,`g2`"},
+
+		{"delete from t1 where id = 1 sw storagedb g1,g2", true, "DELETE FROM `t1` WHERE `id`=1 SW STORAGEDB `g1`,`g2`"},
+		{"delete from t1 where id = 1 CW storagedb g1,g2", true, "DELETE FROM `t1` WHERE `id`=1 CW STORAGEDB `g1`,`g2`"},
+
+		// TODO show create table 使用 STORAGEDB 指定分片
+		{"show create table ps_test.range", true, "SHOW CREATE TABLE `ps_test`.`range`"},
+		// {"show create table ps_test.range STORAGEDB g1", true, "SHOW CREATE TABLE `ps_test`.`range` STORAGEDB `g1`"},
 	}
 	RunTest(t, table, false)
 }
@@ -2628,13 +2658,14 @@ func TestGDBDML(t *testing.T) {
 func TestGDBKeyWords(t *testing.T) {
 	table := []testCase{
 		// TODO
-		// PARITITIONSTORAGEDB
-		// STORAGEDB
-		// DISTRIBUTED BY
-		// DISTRIBUTED BY ... FORCE
-		// SUBDISTRIBUTED BY
-		// CONSISTENCY_OPTION: UR\CR\SW\CW
-		// SAMEDB
+		// [] PARITITIONSTORAGEDB
+		// [x] STORAGEDB
+		// [x] DISTRIBUTED BY
+		// [] DISTRIBUTED BY ... FORCE
+		// [x] SUBDISTRIBUTED BY
+		// [x] CONSISTENCY_OPTION: UR\CR\SW\CW
+		// [] SAMEDB
+		// [] READ_STRATEGY: READMASTER | READSLAVE | READBALANCE
 	}
 	RunTest(t, table, false)
 }

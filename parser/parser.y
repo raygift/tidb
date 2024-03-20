@@ -129,6 +129,13 @@ import (
 	distributed		  "DISTRIBUTED"
 	/* gdb 多级分片关键字 subdistributed */
 	subDistributed    "SUBDISTRIBUTED"
+	/* GDB 指定分片关键字 storagedb */
+	storageDB		  "STORAGEDB"
+	/* GDB 一致性关键字 CR/CW/SW/UR */
+	cr				  "CR"
+	cw				  "CW"
+	sw				  "SW"
+	ur				  "UR"
 	div               "DIV"
 	doubleType        "DOUBLE"
 	drop              "DROP"
@@ -1136,6 +1143,8 @@ import (
 	DWhenClause							   "GDB distributed case when clause"
 	SubdistributedOpt					   "GDB distributed case... when... then subdistributed by clause"
 	DElseOpt							   "GDB distributed case when ... then ... else..."
+	StorageDBOpt						   "GDB storagedb keyword, STORAGEDB GroupNoList"
+	ConsistencyOpt						   "GDB Consistency option(UR/CR/SW/CW)"
 	DefaultFalseDistinctOpt                "Distinct option which defaults to false"
 	DefaultTrueDistinctOpt                 "Distinct option which defaults to true"
 	BuggyDefaultFalseDistinctOpt           "Distinct option which accepts DISTINCT ALL and defaults to false"
@@ -4983,7 +4992,7 @@ DoStmt:
  *
  *******************************************************************/
 DeleteWithoutUsingStmt:
-	"DELETE" TableOptimizerHintsOpt PriorityOpt QuickOptional IgnoreOptional "FROM" TableName PartitionNameListOpt TableAsNameOpt IndexHintListOpt WhereClauseOptional OrderByOptional LimitClause
+	"DELETE" TableOptimizerHintsOpt PriorityOpt QuickOptional IgnoreOptional "FROM" TableName PartitionNameListOpt TableAsNameOpt IndexHintListOpt WhereClauseOptional OrderByOptional LimitClause ConsistencyOpt StorageDBOpt
 	{
 		// Single Table
 		tn := $7.(*ast.TableName)
@@ -5007,6 +5016,12 @@ DeleteWithoutUsingStmt:
 		}
 		if $13 != nil {
 			x.Limit = $13.(*ast.Limit)
+		}
+		if $14 != nil {
+			x.Consistency = $14.(*ast.ConsistencyOpt)
+		}
+		if $15 != nil {
+			x.StorageDB = $15.(*ast.StorageDBOpt)
 		}
 
 		$$ = x
@@ -9098,7 +9113,7 @@ SelectStmt:
 		}
 		$$ = st
 	}
-|	SelectStmtFromTable OrderByOptional SelectStmtLimitOpt SelectLockOpt SelectStmtIntoOption
+|	SelectStmtFromTable OrderByOptional SelectStmtLimitOpt SelectLockOpt SelectStmtIntoOption ConsistencyOpt StorageDBOpt
 	{
 		st := $1.(*ast.SelectStmt)
 		if $4 != nil {
@@ -9112,6 +9127,12 @@ SelectStmt:
 		}
 		if $5 != nil {
 			st.SelectIntoOpt = $5.(*ast.SelectIntoOption)
+		}
+		if $6 != nil {
+			st.Consistency = $6.(*ast.ConsistencyOpt)
+		}
+		if $7 != nil {
+			st.StorageDB = $7.(*ast.StorageDBOpt)
 		}
 		$$ = st
 	}
@@ -12455,6 +12476,47 @@ DistributedDefinitionClauseBetweenList:
 		$$ = append($1.([]ast.DistributedDefinitionClauseBetweenValuePair), $2.(ast.DistributedDefinitionClauseBetweenValuePair))
 	}
 
+ConsistencyOpt:
+/* empty */
+	{
+		$$ = nil
+	}
+|	"UR"
+	{
+		$$ = &ast.ConsistencyOpt{
+			Tp: ast.ConsistencyOptTypeUR,
+		}
+	}
+|	"CR"
+	{
+		$$ = &ast.ConsistencyOpt{
+			Tp: ast.ConsistencyOptTypeCR,
+		}
+	}
+|	"SW"
+	{
+		$$ = &ast.ConsistencyOpt{
+			Tp: ast.ConsistencyOptTypeSW,
+		}
+	}
+|	"CW"
+	{
+		$$ = &ast.ConsistencyOpt{
+			Tp: ast.ConsistencyOptTypeCW,
+		}
+	}
+
+StorageDBOpt:
+	{
+		$$ = nil
+	}
+|	"STORAGEDB" IdentList
+	{
+		$$ = &ast.StorageDBOpt{
+			GroupNoList: $2.([]model.CIStr),
+		}
+	}
+
 TableOption:
 	PartDefOption
 |	DefaultKwdOpt CharsetKw EqOpt CharsetName
@@ -13452,11 +13514,27 @@ StringNameOrBRIEOptionKeyword:
  * See https://dev.mysql.com/doc/refman/5.7/en/update.html
  ***********************************************************************************/
 UpdateStmt:
-	UpdateStmtNoWith
-|	WithClause UpdateStmtNoWith
+	UpdateStmtNoWith ConsistencyOpt StorageDBOpt
+	{
+		u := $1.(*ast.UpdateStmt)
+		if $2 != nil {
+			u.Consistency = $2.(*ast.ConsistencyOpt)
+		}
+		if $3 != nil {
+			u.StorageDB = $3.(*ast.StorageDBOpt)
+		}
+		$$ = u
+	}
+|	WithClause UpdateStmtNoWith  ConsistencyOpt StorageDBOpt
 	{
 		u := $2.(*ast.UpdateStmt)
 		u.With = $1.(*ast.WithClause)
+		if $3 != nil {
+			u.Consistency = $3.(*ast.ConsistencyOpt)
+		}
+		if $4 != nil {
+			u.StorageDB = $4.(*ast.StorageDBOpt)
+		}
 		$$ = u
 	}
 

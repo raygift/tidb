@@ -1144,7 +1144,9 @@ type SelectStmt struct {
 	// OrderBy is the ordering expression list.
 	OrderBy *OrderByClause
 	// Limit is the limit clause.
-	Limit *Limit
+	Limit       *Limit
+	Consistency *ConsistencyOpt // GDB 一致性选项
+	StorageDB   *StorageDBOpt   // GDB 指定存储安全组
 	// LockInfo is the lock type
 	LockInfo *SelectLockInfo
 	// TableHints represents the table level Optimizer Hint for join type
@@ -1419,6 +1421,16 @@ func (n *SelectStmt) Restore(ctx *format.RestoreCtx) error {
 		ctx.WritePlain(" ")
 		if err := n.SelectIntoOpt.Restore(ctx); err != nil {
 			return errors.Annotate(err, "An error occurred while restore SelectStmt.SelectIntoOpt")
+		}
+	}
+	if n.Consistency != nil {
+		if err := n.Consistency.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore SelectStmt.Consistency")
+		}
+	}
+	if n.StorageDB != nil {
+		if err := n.StorageDB.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore SelectStmt.StorageDB")
 		}
 	}
 	return nil
@@ -2443,6 +2455,52 @@ func (n *InsertStmt) TableRefsJoin() (*Join, bool) {
 	return s.From.TableRefs, true
 }
 
+// ConsistencyOptType is the type for DistributedOptions
+type ConsistencyOptType int
+
+// DistributedOptions types.
+const (
+	ConsistencyOptTypeCR ConsistencyOptType = iota
+	ConsistencyOptTypeCW
+	ConsistencyOptTypeSW
+	ConsistencyOptTypeUR
+)
+
+type ConsistencyOpt struct {
+	Tp ConsistencyOptType
+}
+
+func (n *ConsistencyOpt) Restore(ctx *format.RestoreCtx) error {
+	switch n.Tp {
+	case ConsistencyOptTypeCR:
+		ctx.WriteKeyWord(" CR")
+	case ConsistencyOptTypeCW:
+		ctx.WriteKeyWord(" CW")
+	case ConsistencyOptTypeSW:
+		ctx.WriteKeyWord(" SW")
+	case ConsistencyOptTypeUR:
+		ctx.WriteKeyWord(" UR")
+	default:
+		return errors.Errorf("invalid ConsistencyOptType: %d", n.Tp)
+	}
+	return nil
+}
+
+type StorageDBOpt struct {
+	GroupNoList []model.CIStr
+}
+
+func (n *StorageDBOpt) Restore(ctx *format.RestoreCtx) error {
+	ctx.WriteKeyWord(" STORAGEDB ")
+	for i, db := range n.GroupNoList {
+		ctx.WriteName(db.O)
+		if i < len(n.GroupNoList)-1 {
+			ctx.WritePlain(",")
+		}
+	}
+	return nil
+}
+
 // DeleteStmt is a statement to delete rows from table.
 // See https://dev.mysql.com/doc/refman/5.7/en/delete.html
 type DeleteStmt struct {
@@ -2455,6 +2513,8 @@ type DeleteStmt struct {
 	Where        ExprNode
 	Order        *OrderByClause
 	Limit        *Limit
+	Consistency  *ConsistencyOpt
+	StorageDB    *StorageDBOpt
 	Priority     mysql.PriorityEnum
 	IgnoreErr    bool
 	Quick        bool
@@ -2552,7 +2612,16 @@ func (n *DeleteStmt) Restore(ctx *format.RestoreCtx) error {
 			return errors.Annotate(err, "An error occurred while restore DeleteStmt.Limit")
 		}
 	}
-
+	if n.Consistency != nil {
+		if err := n.Consistency.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore DeleteStmt.Consistency")
+		}
+	}
+	if n.StorageDB != nil {
+		if err := n.StorageDB.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore DeleteStmt.StorageDB")
+		}
+	}
 	return nil
 }
 
@@ -2710,6 +2779,8 @@ type UpdateStmt struct {
 	Where         ExprNode
 	Order         *OrderByClause
 	Limit         *Limit
+	Consistency   *ConsistencyOpt
+	StorageDB     *StorageDBOpt
 	Priority      mysql.PriorityEnum
 	IgnoreErr     bool
 	MultipleTable bool
@@ -2793,7 +2864,16 @@ func (n *UpdateStmt) Restore(ctx *format.RestoreCtx) error {
 			return errors.Annotate(err, "An error occur while restore UpdateStmt.Limit")
 		}
 	}
-
+	if n.Consistency != nil {
+		if err := n.Consistency.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore UpdateStmt.Consistency")
+		}
+	}
+	if n.StorageDB != nil {
+		if err := n.StorageDB.Restore(ctx); err != nil {
+			return errors.Annotate(err, "An error occurred while restore UpdateStmt.StorageDB")
+		}
+	}
 	return nil
 }
 
