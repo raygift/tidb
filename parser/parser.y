@@ -136,6 +136,8 @@ import (
 	cw				  "CW"
 	sw				  "SW"
 	ur				  "UR"
+	/* GDB nogtid 关键字 */
+	nogtid			  "NOGTID"
 	div               "DIV"
 	doubleType        "DOUBLE"
 	drop              "DROP"
@@ -1224,6 +1226,7 @@ import (
 	LockClause                             "Alter table lock clause"
 	LogTypeOpt                             "Optional log type used in FLUSH statements"
 	MaxValPartOpt                          "MAXVALUE partition option"
+	Nogtid                                 "GDB nogtid keyword"
 	NullPartOpt                            "NULL Partition option"
 	NumLiteral                             "Num/Int/Float/Decimal Literal"
 	NoWriteToBinLogAliasOpt                "NO_WRITE_TO_BINLOG alias LOCAL or empty"
@@ -12517,6 +12520,15 @@ StorageDBOpt:
 		}
 	}
 
+Nogtid:
+	{
+		$$ = false
+	}
+|	"NOGTID"
+	{
+		$$ = true
+	}
+
 TableOption:
 	PartDefOption
 |	DefaultKwdOpt CharsetKw EqOpt CharsetName
@@ -13514,7 +13526,7 @@ StringNameOrBRIEOptionKeyword:
  * See https://dev.mysql.com/doc/refman/5.7/en/update.html
  ***********************************************************************************/
 UpdateStmt:
-	UpdateStmtNoWith ConsistencyOpt StorageDBOpt
+	UpdateStmtNoWith ConsistencyOpt StorageDBOpt Nogtid
 	{
 		u := $1.(*ast.UpdateStmt)
 		if $2 != nil {
@@ -13523,6 +13535,7 @@ UpdateStmt:
 		if $3 != nil {
 			u.StorageDB = $3.(*ast.StorageDBOpt)
 		}
+		u.NoGTID = $4.(bool)
 		$$ = u
 	}
 |	WithClause UpdateStmtNoWith  ConsistencyOpt StorageDBOpt

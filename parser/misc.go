@@ -545,6 +545,7 @@ var tokenMap = map[string]int{
 	"NODE_ID":                  nodeID,
 	"NODE_STATE":               nodeState,
 	"NODEGROUP":                nodegroup,
+	"NOGTID":                   nogtid,
 	"NOMAXVALUE":               nomaxvalue,
 	"NOMINVALUE":               nominvalue,
 	"NONCLUSTERED":             nonclustered,

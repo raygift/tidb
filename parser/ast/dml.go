@@ -2781,6 +2781,7 @@ type UpdateStmt struct {
 	Limit         *Limit
 	Consistency   *ConsistencyOpt
 	StorageDB     *StorageDBOpt
+	NoGTID        bool
 	Priority      mysql.PriorityEnum
 	IgnoreErr     bool
 	MultipleTable bool
@@ -2873,6 +2874,9 @@ func (n *UpdateStmt) Restore(ctx *format.RestoreCtx) error {
 		if err := n.StorageDB.Restore(ctx); err != nil {
 			return errors.Annotate(err, "An error occurred while restore UpdateStmt.StorageDB")
 		}
+	}
+	if n.NoGTID {
+		ctx.WriteKeyWord(" NOGTID")
 	}
 	return nil
 }

@@ -2651,6 +2651,9 @@ func TestGDBDML(t *testing.T) {
 		// TODO show create table 使用 STORAGEDB 指定分片
 		{"show create table ps_test.range", true, "SHOW CREATE TABLE `ps_test`.`range`"},
 		// {"show create table ps_test.range STORAGEDB g1", true, "SHOW CREATE TABLE `ps_test`.`range` STORAGEDB `g1`"},
+
+		// 对心跳表执行 dml 需支持 nogtid 关键字
+		{"update delay_test.checksums set ts = 17152704053 where id = 1 sw nogtid", true, "UPDATE `delay_test`.`checksums` SET `ts`=17152704053 WHERE `id`=1 SW NOGTID"},
 	}
 	RunTest(t, table, false)
 }
