@@ -464,6 +464,7 @@ var tokenMap = map[string]int{
 	"JSON_ARRAYAGG":            jsonArrayagg,
 	"JSON_OBJECTAGG":           jsonObjectAgg,
 	"JSON":                     jsonType,
+	"KEEPALIVE":                keepalive,
 	"KEY_BLOCK_SIZE":           keyBlockSize,
 	"KEY":                      key,
 	"KEYS":                     keys,

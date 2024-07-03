@@ -2654,6 +2654,11 @@ func TestGDBDML(t *testing.T) {
 
 		// 对心跳表执行 dml 需支持 nogtid 关键字
 		{"update delay_test.checksums set ts = 17152704053 where id = 1 sw nogtid", true, "UPDATE `delay_test`.`checksums` SET `ts`=17152704053 WHERE `id`=1 SW NOGTID"},
+
+		// keepalive 保留字
+		{"select 1 from dual", true, "SELECT 1"},
+		{"select 1 from dual others", false, ""},
+		{"select 1 from dual keepalive", true, "SELECT 1"},
 	}
 	RunTest(t, table, false)
 }

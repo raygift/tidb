@@ -138,6 +138,8 @@ import (
 	ur				  "UR"
 	/* GDB nogtid 关键字 */
 	nogtid			  "NOGTID"
+	/* GDB keepalive 保留字 */
+	keepalive		  "KEEPALIVE"
 	div               "DIV"
 	doubleType        "DOUBLE"
 	drop              "DROP"
@@ -9249,6 +9251,9 @@ CommonTableExpr:
 
 FromDual:
 	"FROM" "DUAL"
+	{}
+|	"FROM" "DUAL" "KEEPALIVE"
+	{}
 
 WindowClauseOptional:
 	{
